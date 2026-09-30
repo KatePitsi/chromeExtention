@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Layout Ruler</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Dongle&family=Elms+Sans:ital,wght@0,100..900;1,100..900&family=Manrope:wght@200..800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body class="page">
+  <main class="panel" id="panel">
+    <header class="panel__head">
+      <h1 class="panel__title"><span class="panel__dot"></span>Layout Ruler</h1>
+      <button class="panel__close" type="button" data-action="popin" aria-label="Put the panel back in the page">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5 5.25 5.25" />
+        </svg>
+      </button>
+    </header>
+
+    <div class="panel__row" id="toggles"></div>
+    <div class="panel__divider"></div>
+    <div id="body"></div>
+    <output class="note" id="note" aria-live="polite"></output>
+  </main>
+  <script src="panel.js"></script>
+</body>
+</html>

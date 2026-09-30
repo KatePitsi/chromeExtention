@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Layout Ruler PDF contrast</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@200..800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="picker.css">
+</head>
+<body class="page">
+  <main class="picker">
+    <header class="picker__head">
+      <h1 class="picker__title"><span class="picker__dot"></span>PDF colour contrast</h1>
+      <p class="picker__source"></p>
+      <div class="picker__open">
+        <button class="btn" type="button" data-action="open">Open a PDF file</button>
+        <input class="picker__file" type="file" accept="application/pdf,.pdf" hidden>
+      </div>
+    </header>
+
+    <div class="picker__body">
+      <section class="stage" aria-labelledby="stage-title">
+        <div class="stage__bar">
+          <h2 class="stage__title" id="stage-title">Captured page</h2>
+          <div class="stage__zoom" role="group" aria-label="Zoom">
+            <button class="btn btn--icon" type="button" data-action="zoom-out" aria-label="Zoom out">−</button>
+            <output class="stage__level" data-zoom-level>100%</output>
+            <button class="btn btn--icon" type="button" data-action="zoom-in" aria-label="Zoom in">+</button>
+            <button class="btn" type="button" data-action="zoom-fit" aria-pressed="true">Fit width</button>
+          </div>
+          <output class="stage__level" data-page-label></output>
+          <button class="btn" type="button" data-action="thumbs" aria-pressed="true">Thumbnails</button>
+        </div>
+        <form class="search" role="search">
+          <input class="search__input" type="search" aria-label="Find word in PDF" placeholder="Find word in PDF" autocomplete="off" spellcheck="false">
+          <button class="btn btn--icon" type="button" data-action="search-prev" aria-label="Previous match">↑</button>
+          <button class="btn btn--icon" type="button" data-action="search-next" aria-label="Next match">↓</button>
+          <output class="search__count"></output>
+        </form>
+        <p class="stage__hint" id="stage-hint">Scroll the PDF and click to pick a colour. Zoom with the buttons or Ctrl + wheel, search with Ctrl + F. With the pages focused, arrow keys move the crosshair (Shift = 10 px), Enter picks and Page Up / Page Down scroll.</p>
+        <div class="stage__view">
+          <nav class="thumbs" aria-label="Page thumbnails">
+            <ol class="thumbs__list"></ol>
+          </nav>
+          <div class="stage__scroll" tabindex="0" role="group" aria-label="PDF pages" aria-describedby="stage-hint">
+            <div class="stage__inner">
+              <span class="stage__marker" aria-hidden="true" hidden></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="side">
+        <section class="side__section" aria-labelledby="colors-title">
+          <h2 class="side__title" id="colors-title">Colours</h2>
+          <div class="colors">
+            <div class="color">
+              <label class="color__pick">
+                <input class="color__radio" type="radio" name="role" value="bg" checked>
+                <span class="color__swatch" data-role="bg"></span>
+                Background
+              </label>
+              <input class="color__hex" type="text" data-role="bg" spellcheck="false" autocomplete="off" placeholder="#ffffff" aria-label="Background colour hex">
+            </div>
+            <div class="color">
+              <label class="color__pick">
+                <input class="color__radio" type="radio" name="role" value="fg">
+                <span class="color__swatch" data-role="fg"></span>
+                Text
+              </label>
+              <input class="color__hex" type="text" data-role="fg" spellcheck="false" autocomplete="off" placeholder="#000000" aria-label="Text colour hex">
+            </div>
+          </div>
+          <label class="option">
+            <input class="option__input" type="checkbox" data-option="snap" checked>
+            Snap text to the strongest nearby pixel
+          </label>
+          <div class="side__row">
+            <button class="btn" type="button" data-action="swap">Swap</button>
+            <button class="btn" type="button" data-action="eyedropper" hidden>Eyedropper</button>
+          </div>
+        </section>
+
+        <section class="side__section" aria-labelledby="result-title">
+          <h2 class="side__title" id="result-title">Contrast</h2>
+          <p class="result__ratio">—</p>
+          <p class="sample">Aa The quick brown fox</p>
+          <ul class="checks">
+            <li class="check" data-min="4.5"><span class="check__name">Normal text · AA <span class="check__min">4.5:1</span></span><strong class="check__status">—</strong></li>
+            <li class="check" data-min="3"><span class="check__name">Large text · AA <span class="check__min">3:1</span></span><strong class="check__status">—</strong></li>
+            <li class="check" data-min="3"><span class="check__name">UI &amp; graphics · AA <span class="check__min">3:1</span></span><strong class="check__status">—</strong></li>
+            <li class="check" data-min="7"><span class="check__name">Normal text · AAA <span class="check__min">7:1</span></span><strong class="check__status">—</strong></li>
+            <li class="check" data-min="4.5"><span class="check__name">Large text · AAA <span class="check__min">4.5:1</span></span><strong class="check__status">—</strong></li>
+          </ul>
+          <div class="side__row">
+            <button class="btn btn--primary" type="button" data-action="copy">Copy result</button>
+          </div>
+        </section>
+
+        <section class="side__section" aria-labelledby="loupe-title">
+          <h2 class="side__title" id="loupe-title">Under the crosshair</h2>
+          <div class="loupe">
+            <canvas class="loupe__canvas" width="126" height="126" aria-hidden="true"></canvas>
+            <p class="loupe__hex">—</p>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <p class="picker__status" role="status"></p>
+  </main>
+  <script type="module" src="picker.js"></script>
+</body>
+</html>
