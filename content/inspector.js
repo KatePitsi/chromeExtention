@@ -124,7 +124,6 @@
       position: fixed;
       box-sizing: border-box;
       border: 1px dashed #38bdf8;
-      background: rgba(56, 189, 248, .08);
     }
     .chip--positioned {
       border: 0;
@@ -1005,17 +1004,25 @@
     return [['text', toHex(ink)], ['background', toHex(background)], ['contrast', notes.join(' · ')]];
   }
 
-  let positioned = { node: null, list: [] };
+  let positionedAll = { time: 0, list: [] };
+
+  function allPositioned() {
+    const now = performance.now();
+    if (now - positionedAll.time > 1000) {
+      const list = [...document.querySelectorAll('*')]
+        .filter((node) => /^(absolute|fixed)$/.test(getComputedStyle(node).position))
+        .slice(0, 500);
+      positionedAll = { time: now, list };
+    }
+    return positionedAll.list;
+  }
 
   function positionedWithin(node) {
-    if (positioned.node !== node) {
-      const list = [...node.querySelectorAll('*')]
-        .slice(0, 3000)
-        .filter((child) => /^(absolute|fixed)$/.test(getComputedStyle(child).position))
-        .slice(0, 40);
-      positioned = { node, list };
-    }
-    return positioned.list.filter((child) => child.isConnected);
+    const area = node.getBoundingClientRect();
+    return allPositioned()
+      .filter((child) => child !== node && child !== host && child.isConnected && !child.contains(node))
+      .filter((child) => node.contains(child) || overlap(area, child.getBoundingClientRect()) > 0)
+      .slice(0, 40);
   }
 
   function lockOn(node) {
