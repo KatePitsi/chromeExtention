@@ -9,6 +9,7 @@
   const state = {
     active: false,
     hovered: null,
+    locked: false,
     pins: [],
     showLayout: true,
     showDistances: true,
@@ -118,6 +119,23 @@
       box-sizing: border-box;
       border: 1px dashed rgba(217, 70, 239, .75);
       background: rgba(217, 70, 239, .06);
+    }
+    .positioned {
+      position: fixed;
+      box-sizing: border-box;
+      border: 1px dashed #38bdf8;
+      background: rgba(56, 189, 248, .08);
+    }
+    .chip--positioned {
+      border: 0;
+      background: rgba(3, 105, 161, .95);
+      font: inherit;
+      cursor: pointer;
+      pointer-events: auto;
+    }
+    .chip--positioned:focus-visible {
+      outline: 2px solid #ffffff;
+      outline-offset: 2px;
     }
     .track--gap {
       border-style: none;
@@ -682,7 +700,7 @@
       lines.push(`justify: ${cs.justifyContent} · align: ${cs.alignItems}`);
     }
     lines.push(`font: ${cs.fontSize}/${cs.lineHeight} ${cs.fontWeight}`);
-    lines.push(`color: ${cs.color}`);
+    lines.push(`color: ${hexOf(cs.color)}`);
     return lines;
   }
 
@@ -953,6 +971,12 @@
     return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
   }
 
+  function hexOf(value) {
+    const [r, g, b, a] = rgba(value);
+    const alpha = a < 1 ? Math.round(a * 255).toString(16).padStart(2, '0') : '';
+    return `${toHex([r, g, b])}${alpha}`;
+  }
+
   function toHex(color) {
     return `#${color.slice(0, 3).map((value) => Math.round(value).toString(16).padStart(2, '0')).join('')}`;
   }
@@ -981,6 +1005,51 @@
     return [['text', toHex(ink)], ['background', toHex(background)], ['contrast', notes.join(' · ')]];
   }
 
+  let positioned = { node: null, list: [] };
+
+  function positionedWithin(node) {
+    if (positioned.node !== node) {
+      const list = [...node.querySelectorAll('*')]
+        .slice(0, 3000)
+        .filter((child) => /^(absolute|fixed)$/.test(getComputedStyle(child).position))
+        .slice(0, 40);
+      positioned = { node, list };
+    }
+    return positioned.list.filter((child) => child.isConnected);
+  }
+
+  function lockOn(node) {
+    state.hovered = node;
+    state.locked = true;
+    invalidate();
+    toast('Locked · Esc or page click to release');
+  }
+
+  function drawPositioned(node) {
+    positionedWithin(node).forEach((child) => {
+      const rect = child.getBoundingClientRect();
+      if (!rect.width && !rect.height) return;
+      const frame = el('div', 'positioned');
+      place(frame, rect);
+      layers.layout.append(frame);
+      const label = `${getComputedStyle(child).position} ${describe(child)}`;
+      const target = el('button', 'chip chip--positioned', { left: `${rect.left}px`, top: `${rect.top}px`, transform: 'translateY(-100%)' });
+      target.type = 'button';
+      target.textContent = label;
+      target.setAttribute('aria-label', `Inspect ${label}`);
+      target.addEventListener('click', () => lockOn(child));
+      layers.labels.append(target);
+    });
+  }
+
+  function positionedFact(node) {
+    const list = positionedWithin(node);
+    if (!list.length) return [];
+    const shown = list.slice(0, 6).map((child) => `${getComputedStyle(child).position} ${describe(child)}`);
+    if (list.length > shown.length) shown.push(`+${list.length - shown.length} more`);
+    return [['absolute / fixed', shown.join(', ')]];
+  }
+
   function factsFor(node) {
     const { rect, cs, margin, padding, border } = metrics(node);
     return [
@@ -992,6 +1061,7 @@
       ['display', cs.display],
       ['gap', `${r1(px(cs.rowGap))} / ${r1(px(cs.columnGap))}`],
       ['font', `${cs.fontSize} / ${cs.lineHeight}`],
+      ...positionedFact(node),
       ...(state.showContrast ? contrastFacts(node) : [])
     ];
   }
@@ -1376,7 +1446,10 @@
     if (hovered) {
       drawBoxModel(hovered);
       spacingLabels(hovered);
-      if (state.showLayout) drawLayout(hovered);
+      if (state.showLayout) {
+        drawLayout(hovered);
+        drawPositioned(hovered);
+      }
     }
 
     if (state.showDistances && hovered) {
@@ -1410,7 +1483,9 @@
 
   function onPointerMove(event) {
     if (!state.active) return;
-    if (event.composedPath().includes(panelBody)) return;
+    if (state.locked) return;
+    const path = event.composedPath();
+    if (path.includes(panelBody) || path.some((node) => node.classList?.contains('chip--positioned'))) return;
     const target = topElementAt(event.clientX, event.clientY);
     if (!target) return;
     if (target !== state.hovered) {
@@ -1423,6 +1498,12 @@
     if (!state.active || !state.copyOnClick || event.button !== 0 || event.composedPath().includes(host)) return;
     event.preventDefault();
     event.stopPropagation();
+    if (state.locked) {
+      state.locked = false;
+      state.hovered = topElementAt(event.clientX, event.clientY) || state.hovered;
+      invalidate();
+      return;
+    }
     const names = classNames(state.hovered);
     if (!names.length) {
       toast('No class on this element');
@@ -1568,7 +1649,10 @@
     if (isEditable(event.target)) return;
 
     if (event.key === 'Escape') {
-      if (state.ruler.enabled) setRulerEnabled(false);
+      if (state.locked) {
+        state.locked = false;
+        invalidate();
+      } else if (state.ruler.enabled) setRulerEnabled(false);
       else deactivate();
       event.preventDefault();
       return;
@@ -1621,6 +1705,7 @@
     if (!state.active) return;
     state.active = false;
     state.hovered = null;
+    state.locked = false;
     setRulerEnabled(false);
     if (state.poppedOut) setPoppedOut(false);
     cancelAnimationFrame(rafId);
