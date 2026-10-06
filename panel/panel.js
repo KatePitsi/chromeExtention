@@ -97,6 +97,7 @@ function empty(text) {
 }
 
 const KEYS = [
+  ['H', 'hover'],
   ['F', 'freeze'],
   ['R', 'ruler'],
   ['E', 'export'],
@@ -112,6 +113,7 @@ const KEYS = [
 ];
 
 const KEY_ACTIONS = {
+  h: 'hover',
   f: 'freeze',
   r: 'ruler',
   e: 'export',
@@ -135,8 +137,14 @@ function shortcuts() {
   return list;
 }
 
+function emptyHint(state) {
+  if (state.showFocusMap) return 'Click an element on the page to see its details.';
+  return state.showHover ? 'Move the pointer over the page.' : 'Turn on hover (H) to inspect elements.';
+}
+
 function render(state) {
   togglesNode.replaceChildren(
+    button('btn', 'hover', 'hover', { pressed: state.showHover }),
     button('btn', 'layout', 'grid / flex', { pressed: state.showLayout }),
     button('btn', 'distances', 'distances', { pressed: state.showDistances }),
     button('btn', 'contrast', 'contrast', { pressed: state.showContrast }),
@@ -145,7 +153,7 @@ function render(state) {
     button('btn', 'focus-map', 'focus map', { pressed: state.showFocusMap })
   );
 
-  const hovered = section('Hovered');
+  const hovered = section(state.showFocusMap ? 'Selected' : 'Hovered');
   if (state.hovered) {
     const name = el('p', 'name');
     name.textContent = state.hovered.name;
@@ -159,7 +167,7 @@ function render(state) {
     if (classes) hovered.append(classes);
     hovered.append(facts(state.hovered.facts), actions);
   } else {
-    hovered.append(empty('Move the pointer over the page.'));
+    hovered.append(empty(emptyHint(state)));
   }
 
   const ruler = section('Ruler');
@@ -261,5 +269,5 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-render({ showLayout: true, showDistances: true, showContrast: true, rulerEnabled: false, copyOnClick: true, showFocusMap: false, hovered: null, measures: [], pins: [] });
+render({ showHover: false, showLayout: false, showDistances: false, showContrast: false, rulerEnabled: false, copyOnClick: false, showFocusMap: false, hovered: null, measures: [], pins: [] });
 command('ping');

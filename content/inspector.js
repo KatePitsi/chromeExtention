@@ -11,10 +11,11 @@
     hovered: null,
     locked: false,
     pins: [],
-    showLayout: true,
-    showDistances: true,
-    showContrast: true,
-    copyOnClick: true,
+    showHover: false,
+    showLayout: false,
+    showDistances: false,
+    showContrast: false,
+    copyOnClick: false,
     showFocusMap: false,
     ruler: { enabled: false, dragging: false, from: null, to: null, measures: [] },
     poppedOut: false
@@ -95,6 +96,9 @@
     .tip__name { color: #f87a90; word-break: break-all; }
     .tip__size { color: #fcd34d; }
     .tip__row { color: #cbd5e1; }
+    .tip__key { color: #94a3b8; }
+    .tip__row--issue { color: #fcd34d; }
+    .tip--focus { box-shadow: 0 0 0 2px #f59e0b, 0 12px 28px rgba(2, 6, 23, .45); }
     .rule {
       position: fixed;
       border-color: currentColor;
@@ -689,11 +693,230 @@
 
   function toggleFocusMap() {
     state.showFocusMap = !state.showFocusMap;
+    state.hovered = null;
+    state.locked = false;
     if (state.showFocusMap) {
       const stops = focusStops();
       const positive = stops.filter((node) => node.tabIndex > 0).length;
       toast(`Focus map · ${stops.length} stops${positive ? ` · ${positive} with tabindex > 0` : ''}`);
     } else toast('Focus map off');
+    invalidate();
+  }
+
+  const NAME_FROM_CONTENT = /^(button|link|heading|checkbox|radio|tab|menuitem|option|switch|cell|columnheader|rowheader|tooltip|treeitem)$/;
+  const TAG_ROLES = { nav: 'navigation', main: 'main', header: 'banner', footer: 'contentinfo', aside: 'complementary', form: 'form', ul: 'list', ol: 'list', li: 'listitem', table: 'table', dialog: 'dialog', p: 'paragraph', textarea: 'textbox', button: 'button', summary: 'button', iframe: 'iframe' };
+  const INPUT_ROLES = { checkbox: 'checkbox', radio: 'radio', range: 'slider', number: 'spinbutton', search: 'searchbox', button: 'button', submit: 'button', reset: 'button', image: 'button' };
+
+  function textOf(node) {
+    const text = (node.innerText ?? node.textContent ?? '').replace(/\s+/g, ' ').trim();
+    if (text) return text;
+    return [...node.querySelectorAll('img[alt], [aria-label]')]
+      .map((child) => child.getAttribute('alt') ?? child.getAttribute('aria-label'))
+      .join(' ')
+      .trim();
+  }
+
+  function idrefText(value) {
+    return value.split(/\s+/).map((id) => document.getElementById(id)).filter(Boolean).map(textOf).join(' ').trim();
+  }
+
+  function implicitRole(node) {
+    const tag = node.tagName.toLowerCase();
+    if (tag === 'a' || tag === 'area') return node.hasAttribute('href') ? 'link' : 'generic';
+    if (/^h[1-6]$/.test(tag)) return 'heading';
+    if (tag === 'img') return node.getAttribute('alt') === '' ? 'presentation' : 'img';
+    if (tag === 'select') return node.multiple || node.size > 1 ? 'listbox' : 'combobox';
+    if (tag === 'section') return node.hasAttribute('aria-label') || node.hasAttribute('aria-labelledby') ? 'region' : 'generic';
+    if (tag === 'input') return node.list ? 'combobox' : INPUT_ROLES[node.type] || 'textbox';
+    return TAG_ROLES[tag] || 'generic';
+  }
+
+  function roleOf(node) {
+    const explicit = node.getAttribute('role')?.trim().split(/\s+/)[0];
+    return explicit ? { role: explicit, explicit: true } : { role: implicitRole(node), explicit: false };
+  }
+
+  function accessibleName(node, role) {
+    const labelledby = node.getAttribute('aria-labelledby');
+    if (labelledby) {
+      const text = idrefText(labelledby);
+      if (text) return [text, 'aria-labelledby'];
+    }
+    const label = node.getAttribute('aria-label')?.trim();
+    if (label) return [label, 'aria-label'];
+    if (node.labels?.length) {
+      const text = [...node.labels].map(textOf).join(' ').trim();
+      if (text) return [text, '<label>'];
+    }
+    if (/^(IMG|AREA)$/.test(node.tagName) || (node.tagName === 'INPUT' && node.type === 'image')) {
+      const alt = node.getAttribute('alt');
+      if (alt !== null) return [alt.trim(), 'alt'];
+    }
+    if (node.tagName === 'INPUT' && /^(submit|reset|button)$/.test(node.type) && node.value) return [node.value, 'value'];
+    if (NAME_FROM_CONTENT.test(role)) {
+      const text = textOf(node);
+      if (text) return [text, 'content'];
+    }
+    const title = node.getAttribute('title')?.trim();
+    if (title) return [title, 'title'];
+    const placeholder = node.getAttribute('placeholder')?.trim();
+    if (placeholder) return [placeholder, 'placeholder'];
+    return ['', ''];
+  }
+
+  const FIELD_ROLES = /^(textbox|searchbox|combobox|listbox|slider|spinbutton|checkbox|radio|switch)$/;
+  const LANDMARK_ROLES = /^(navigation|main|banner|contentinfo|complementary|region|form|search)$/;
+  const VAGUE_LINK = /^(click here|here|read more|more|learn more|details|link|εδώ|περισσότερα|δείτε περισσότερα|μάθετε περισσότερα)$/i;
+  const FILE_NAME = /\.(jpe?g|png|gif|webp|avif|svg)$/i;
+
+  function kindOf(node, role) {
+    if (node.tagName === 'IFRAME') return 'frame';
+    if (role === 'img' || role === 'presentation' || role === 'none' || /^(IMG|svg)$/.test(node.tagName)) return 'image';
+    if (role === 'link') return 'link';
+    if (role === 'button') return 'button';
+    if (FIELD_ROLES.test(role)) return 'field';
+    if (role === 'heading') return 'heading';
+    if (LANDMARK_ROLES.test(role)) return 'landmark';
+    return 'other';
+  }
+
+  function headingLevel(node) {
+    return Number(/^H([1-6])$/.exec(node.tagName)?.[1] || node.getAttribute('aria-level') || 2);
+  }
+
+  function previousHeadingLevel(node) {
+    const headings = [...document.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]')];
+    const previous = headings[headings.indexOf(node) - 1];
+    return previous ? headingLevel(previous) : 0;
+  }
+
+  function nameFact(add, name, source, required) {
+    if (!name) {
+      add('name', required ? 'missing (4.1.2)' : 'none', required);
+      return;
+    }
+    add('name', `"${name}" · ${source}`);
+  }
+
+  function labelInName(add, node) {
+    const visible = textOf(node).toLowerCase();
+    const ariaLabel = node.getAttribute('aria-label')?.trim().toLowerCase();
+    if (ariaLabel && visible && !ariaLabel.includes(visible)) add('label in name', 'aria-label does not contain the visible text (2.5.3)', true);
+  }
+
+  function targetSize(add, node) {
+    const rect = node.getBoundingClientRect();
+    const fits = rect.width >= 24 && rect.height >= 24;
+    add('target', `${r1(rect.width)} × ${r1(rect.height)}${fits ? '' : ' · under 24px, check spacing (2.5.8)'}`, !fits);
+  }
+
+  function stateFact(add, node, names) {
+    const states = names.filter((name) => node.hasAttribute(name)).map((name) => `${name}="${node.getAttribute(name)}"`);
+    if (states.length) add('state', states.join(' · '));
+  }
+
+  function linkFacts(add, node, name, source) {
+    nameFact(add, name, source, true);
+    if (name && VAGUE_LINK.test(name)) add('purpose', 'vague out of context (2.4.4)', true);
+    const href = node.getAttribute('href') || '';
+    if (href === '#' || /^javascript:/i.test(href)) add('href', `"${href}" · an action, should be a <button>`, true);
+    if (node.target === '_blank' && !/new (tab|window)|νέα καρτέλα|νέο παράθυρο/i.test(name)) add('opens', 'new tab, not announced in the name', true);
+    stateFact(add, node, ['aria-current']);
+    labelInName(add, node);
+    targetSize(add, node);
+  }
+
+  function buttonFacts(add, node, name, source) {
+    nameFact(add, name, source, true);
+    if (!/^(BUTTON|SUMMARY|INPUT)$/.test(node.tagName)) add('element', `<${node.tagName.toLowerCase()}> as button · needs Enter + Space`, true);
+    stateFact(add, node, ['aria-expanded', 'aria-pressed', 'aria-controls', 'aria-haspopup', 'disabled', 'aria-disabled']);
+    labelInName(add, node);
+    targetSize(add, node);
+  }
+
+  function fieldFacts(add, node, role, name, source) {
+    if (!name) add('label', 'missing (3.3.2 / 4.1.2)', true);
+    else if (source === 'placeholder' || source === 'title') add('label', `"${name}" · ${source} only, add a visible <label>`, true);
+    else add('label', `"${name}" · ${source}`);
+    if (node.type === 'checkbox' || node.type === 'radio') add('state', node.checked ? 'checked' : 'unchecked');
+    stateFact(add, node, ['required', 'aria-required', 'aria-invalid', 'aria-expanded', 'autocomplete', 'disabled']);
+    const describedby = node.getAttribute('aria-describedby');
+    if (describedby) {
+      const text = idrefText(describedby);
+      add('description', text || `aria-describedby="${describedby}" points to nothing`, !text);
+    }
+    if (node.getAttribute('aria-invalid') === 'true' && !describedby) add('error', 'invalid but no aria-describedby message (3.3.1)', true);
+    if (/^(checkbox|radio|switch|slider)$/.test(role)) targetSize(add, node);
+  }
+
+  function imageFacts(add, node, role, name, source) {
+    if (node.tagName === 'svg') {
+      if (node.closest('[aria-hidden="true"]')) add('alt', 'decorative · aria-hidden');
+      else if (name) add('alt', `"${name}" · ${source}`);
+      else if (node.querySelector('title')?.textContent.trim()) add('alt', `"${node.querySelector('title').textContent.trim()}" · <title>`);
+      else add('alt', 'no name and not aria-hidden (1.1.1)', true);
+      return;
+    }
+    const alt = node.getAttribute('alt');
+    if (role === 'presentation' || role === 'none' || alt === '') add('alt', 'decorative · empty alt');
+    else if (alt === null && !name) add('alt', 'missing (1.1.1)', true);
+    else if (FILE_NAME.test(name)) add('alt', `"${name}" · a file name, not a description`, true);
+    else add('alt', `"${name}" · ${source}`);
+  }
+
+  function headingFacts(add, node, name) {
+    const level = headingLevel(node);
+    const previous = previousHeadingLevel(node);
+    add('level', previous && level > previous + 1 ? `h${level} · skips from h${previous} (1.3.1)` : `h${level}`, Boolean(previous && level > previous + 1));
+    add('text', name ? `"${name}"` : 'empty heading', !name);
+  }
+
+  function frameFacts(add, node) {
+    const title = node.getAttribute('title')?.trim() || node.getAttribute('aria-label')?.trim();
+    add('title', title ? `"${title}"` : 'missing (4.1.2)', !title);
+  }
+
+  function landmarkFacts(add, node, role, name) {
+    const siblings = [...document.querySelectorAll(role === 'navigation' ? 'nav, [role="navigation"]' : `[role="${role}"]`)].length;
+    if (name) add('name', `"${name}"`);
+    else if (role === 'region') add('name', 'missing, a section is only a region when named', true);
+    else if (siblings > 1) add('name', `none · ${siblings} ${role} landmarks, name them apart`, true);
+  }
+
+  function a11yFacts(node) {
+    const facts = [];
+    const add = (key, value, issue = false) => facts.push([key, value, issue]);
+    const { role, explicit } = roleOf(node);
+    const [name, source] = accessibleName(node, role);
+    const stops = focusStops();
+    const position = stops.indexOf(node);
+    const kind = kindOf(node, role);
+
+    add('role', `${role}${explicit ? ' · role attr' : ''}`);
+    if (position >= 0) add('tab stop', `${position + 1} of ${stops.length}${node.tabIndex > 0 ? ` · tabindex ${node.tabIndex} breaks the order` : ''}`, node.tabIndex > 0);
+
+    if (kind === 'link') linkFacts(add, node, name, source);
+    else if (kind === 'button') buttonFacts(add, node, name, source);
+    else if (kind === 'field') fieldFacts(add, node, role, name, source);
+    else if (kind === 'image') imageFacts(add, node, role, name, source);
+    else if (kind === 'heading') headingFacts(add, node, name);
+    else if (kind === 'frame') frameFacts(add, node);
+    else if (kind === 'landmark') landmarkFacts(add, node, role, name);
+    else if (position >= 0 && role === 'generic') add('role', 'focusable but no role (4.1.2)', true);
+    else if (name) add('name', `"${name}" · ${source}`);
+
+    if (position >= 0 && node.closest('[aria-hidden="true"]')) add('hidden', 'focusable inside aria-hidden (4.1.2)', true);
+
+    const contrast = contrastFacts(node).find(([key]) => key === 'contrast');
+    if (contrast) add('contrast', contrast[1], contrast[1].includes('AA fail'));
+
+    return facts;
+  }
+
+  function selectInMap(target) {
+    if (!target) return;
+    state.hovered = target.closest(FOCUSABLE) || target;
+    state.locked = true;
     invalidate();
   }
 
@@ -831,6 +1054,27 @@
       tip.append(row);
     });
 
+    showTip(tip, node);
+  }
+
+  function drawFocusTip(node) {
+    const tip = el('div', 'tip tip--focus');
+    const name = el('span', 'tip__name');
+    name.textContent = describe(node);
+    tip.append(name);
+
+    a11yFacts(node).forEach(([key, value, issue]) => {
+      const row = el('span', issue ? 'tip__row tip__row--issue' : 'tip__row');
+      const term = el('span', 'tip__key');
+      term.textContent = `${issue ? '⚠ ' : ''}${key} `;
+      row.append(term, value);
+      tip.append(row);
+    });
+
+    showTip(tip, node);
+  }
+
+  function showTip(tip, node) {
     layers.labels.append(tip);
     const { width, height } = tip.getBoundingClientRect();
     const { left, top } = tipPosition(node, width, height);
@@ -1181,7 +1425,8 @@
       ['gap', `${r1(px(cs.rowGap))} / ${r1(px(cs.columnGap))}`],
       ['font', `${cs.fontSize} / ${cs.lineHeight}`],
       ...positionedFact(node),
-      ...(state.showContrast ? contrastFacts(node) : [])
+      ...(state.showFocusMap ? a11yFacts(node) : []),
+      ...(state.showContrast && !state.showFocusMap ? contrastFacts(node) : [])
     ];
   }
 
@@ -1364,6 +1609,11 @@
     return node;
   }
 
+  function emptyHint() {
+    if (state.showFocusMap) return 'Click an element on the page to see its details.';
+    return state.showHover ? 'Move the pointer over the page.' : 'Turn on hover (H) to inspect elements.';
+  }
+
   function renderPanel() {
     clear(panelBody);
 
@@ -1378,6 +1628,7 @@
 
     const toggles = el('div', 'panel__row');
     toggles.append(
+      button('btn', 'hover', 'hover', { pressed: state.showHover }),
       button('btn', 'layout', 'grid / flex', { pressed: state.showLayout }),
       button('btn', 'distances', 'distances', { pressed: state.showDistances }),
       button('btn', 'contrast', 'contrast', { pressed: state.showContrast }),
@@ -1388,7 +1639,7 @@
 
     const hoverSection = el('section', 'panel__section');
     const hoverLabel = el('h3', 'panel__label');
-    hoverLabel.textContent = 'Hovered';
+    hoverLabel.textContent = state.showFocusMap ? 'Selected' : 'Hovered';
     hoverSection.append(hoverLabel);
 
     if (state.hovered && state.hovered.isConnected) {
@@ -1413,7 +1664,7 @@
       hoverSection.append(facts, actions);
     } else {
       const empty = el('p', 'panel__empty');
-      empty.textContent = 'Move the pointer over the page.';
+      empty.textContent = emptyHint();
       hoverSection.append(empty);
     }
 
@@ -1504,6 +1755,7 @@
 
     const keys = el('dl', 'keys');
     [
+      ['H', 'hover'],
       ['F', 'freeze'],
       ['R', 'ruler'],
       ['E', 'export'],
@@ -1538,6 +1790,7 @@
 
   function signature() {
     const parts = [
+      state.showHover,
       state.showLayout,
       state.showDistances,
       state.showContrast,
@@ -1565,8 +1818,8 @@
     drawPins();
 
     const hovered = state.hovered && state.hovered.isConnected ? state.hovered : null;
-    if (hovered) {
-      drawBoxModel(hovered);
+    if (hovered) drawBoxModel(hovered);
+    if (hovered && !state.showFocusMap) {
       spacingLabels(hovered);
       if (state.showLayout) {
         drawLayout(hovered);
@@ -1585,7 +1838,8 @@
     drawRuler();
     refreshFocusMap(true);
 
-    if (hovered) drawTip(hovered);
+    if (hovered && state.showFocusMap) drawFocusTip(hovered);
+    else if (hovered) drawTip(hovered);
     renderPanel();
     pushState();
   }
@@ -1606,7 +1860,7 @@
 
   function onPointerMove(event) {
     if (!state.active) return;
-    if (state.locked) return;
+    if (state.locked || state.showFocusMap || !state.showHover) return;
     const path = event.composedPath();
     if (path.includes(panelBody) || path.some((node) => node.classList?.contains('chip--positioned'))) return;
     const target = topElementAt(event.clientX, event.clientY);
@@ -1617,8 +1871,21 @@
     }
   }
 
+  function onPageDown(event) {
+    if (!state.active || !state.showFocusMap || event.composedPath().includes(host)) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
   function onPageClick(event) {
-    if (!state.active || !state.copyOnClick || event.button !== 0 || event.composedPath().includes(host)) return;
+    if (!state.active || event.button !== 0 || event.composedPath().includes(host)) return;
+    if (state.showFocusMap) {
+      event.preventDefault();
+      event.stopPropagation();
+      selectInMap(topElementAt(event.clientX, event.clientY));
+      return;
+    }
+    if (!state.copyOnClick) return;
     event.preventDefault();
     event.stopPropagation();
     if (state.locked) {
@@ -1641,6 +1908,15 @@
     const index = state.pins.findIndex((pin) => pin.el === node);
     if (index >= 0) state.pins.splice(index, 1);
     else state.pins.push({ el: node, color: PIN_COLORS[state.pins.length % PIN_COLORS.length] });
+    invalidate();
+  }
+
+  function toggleHover() {
+    state.showHover = !state.showHover;
+    if (!state.showHover && !state.showFocusMap) {
+      state.hovered = null;
+      state.locked = false;
+    }
     invalidate();
   }
 
@@ -1687,6 +1963,7 @@
   function runAction(action, index, value) {
     if (action === 'close') deactivate();
     if (action === 'freeze') togglePin(state.hovered);
+    if (action === 'hover') toggleHover();
     if (action === 'layout') state.showLayout = !state.showLayout;
     if (action === 'distances') state.showDistances = !state.showDistances;
     if (action === 'contrast') state.showContrast = !state.showContrast;
@@ -1733,6 +2010,7 @@
     const signed = (value) => `${value >= 0 ? '+' : ''}${r1(value)}`;
 
     return {
+      showHover: state.showHover,
       showLayout: state.showLayout,
       showDistances: state.showDistances,
       showContrast: state.showContrast,
@@ -1776,6 +2054,7 @@
     if (event.key === 'Escape') {
       if (state.locked) {
         state.locked = false;
+        if (state.showFocusMap) state.hovered = null;
         invalidate();
       } else if (state.ruler.enabled) setRulerEnabled(false);
       else deactivate();
@@ -1793,6 +2072,7 @@
     else if (key === 'd') { state.showDistances = !state.showDistances; invalidate(); }
     else if (key === 'a') { state.showContrast = !state.showContrast; invalidate(); }
     else if (key === 'n') toggleCopyOnClick();
+    else if (key === 'h') toggleHover();
     else if (key === 't') toggleFocusMap();
     else return;
 
@@ -1813,6 +2093,7 @@
     if (!host) build();
     if (!host.isConnected) document.documentElement.append(host);
     host.hidden = false;
+    Object.assign(state, { showHover: false, showLayout: false, showDistances: false, showContrast: false, copyOnClick: false, showFocusMap: false });
     state.active = true;
     document.addEventListener('mousemove', onPointerMove, true);
     window.addEventListener('mousemove', onRulerMove, true);
@@ -1820,6 +2101,7 @@
     window.addEventListener('mousemove', onPanelMove, true);
     window.addEventListener('mouseup', onPanelUp, true);
     window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('mousedown', onPageDown, true);
     window.addEventListener('click', onPageClick, true);
     window.addEventListener('scroll', onViewportChange, true);
     window.addEventListener('resize', onViewportChange, true);
@@ -1841,6 +2123,7 @@
     window.removeEventListener('mousemove', onPanelMove, true);
     window.removeEventListener('mouseup', onPanelUp, true);
     window.removeEventListener('keydown', onKeyDown, true);
+    window.removeEventListener('mousedown', onPageDown, true);
     window.removeEventListener('click', onPageClick, true);
     window.removeEventListener('scroll', onViewportChange, true);
     window.removeEventListener('resize', onViewportChange, true);

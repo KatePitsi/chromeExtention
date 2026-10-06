@@ -9,8 +9,12 @@ and lets you freeze elements to measure and compare against whatever you hover n
 2. **Load unpacked** → pick this folder.
 3. Open any page and click the toolbar icon, or press **Alt + Shift + I** — both toggle the inspector.
 
+Every option (hover, grid / flex, distances, contrast, click copies class, focus map) starts off each time the
+inspector opens — switch on just what you need.
+
 ## What it shows
 
+- **Hover** (`H` or the **hover** button) turns on the inspection below.
 - **Box model** on the hovered element: margin / border / padding / content, with px labels for every side.
 - **Tooltip** with selector, `width × height`, display, position, font and colour. It sits below the
   element's margin box (clear of grid labels, frozen elements and the panel), falling back to a viewport corner.
@@ -36,7 +40,9 @@ and lets you freeze elements to measure and compare against whatever you hover n
 - **Focus map** (`T` or the **focus map** button): numbers every keyboard tab stop in the order Tab visits
   them and joins them with a dashed path, so jumps in the focus order are visible at a glance. Stops with
   `tabindex > 0` are marked red; hidden, disabled, `inert` and `tabindex="-1"` elements are left out, and a
-  radio group counts once.
+  radio group counts once. While it's on, hovering draws nothing and the page doesn't take focus or clicks:
+  click an element to select it, and a bubble next to it (and the panel) shows its a11y facts (tab stop, role, accessible
+  name and its source, label-in-name, tabindex, ARIA states, description, aria-hidden, target size). `Esc` clears it.
 - **Frozen elements**: pin any element, then hover another — dashed rulers show the distance between them
   (edge deltas when they overlap or nest), and the panel lists Δ width / Δ height per frozen element.
 
@@ -60,6 +66,7 @@ PDFs opened from `file://` need **Allow access to file URLs** (extension details
 | Key | Action |
 | --- | --- |
 | `Alt + Shift + I` | toggle the inspector |
+| `H` | hover inspection on/off |
 | `F` | freeze / unfreeze the hovered element |
 | `R` | ruler: drag to measure (Shift = straight) |
 | `E` | export the current view as PNG |
