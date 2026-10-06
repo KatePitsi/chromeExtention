@@ -107,6 +107,7 @@ const KEYS = [
   ['D', 'distance'],
   ['A', 'contrast'],
   ['N', 'navigate'],
+  ['T', 'focus map'],
   ['Esc', 'exit']
 ];
 
@@ -118,7 +119,8 @@ const KEY_ACTIONS = {
   l: 'layout',
   d: 'distances',
   a: 'contrast',
-  n: 'copy-on-click'
+  n: 'copy-on-click',
+  t: 'focus-map'
 };
 
 function shortcuts() {
@@ -139,7 +141,8 @@ function render(state) {
     button('btn', 'distances', 'distances', { pressed: state.showDistances }),
     button('btn', 'contrast', 'contrast', { pressed: state.showContrast }),
     button('btn', 'ruler', 'ruler', { icon: ICONS.ruler, pressed: state.rulerEnabled }),
-    button('btn', 'copy-on-click', 'click copies class', { pressed: state.copyOnClick })
+    button('btn', 'copy-on-click', 'click copies class', { pressed: state.copyOnClick }),
+    button('btn', 'focus-map', 'focus map', { pressed: state.showFocusMap })
   );
 
   const hovered = section('Hovered');
@@ -258,5 +261,5 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-render({ showLayout: true, showDistances: true, showContrast: true, rulerEnabled: false, copyOnClick: true, hovered: null, measures: [], pins: [] });
+render({ showLayout: true, showDistances: true, showContrast: true, rulerEnabled: false, copyOnClick: true, showFocusMap: false, hovered: null, measures: [], pins: [] });
 command('ping');

@@ -15,6 +15,7 @@
     showDistances: true,
     showContrast: true,
     copyOnClick: true,
+    showFocusMap: false,
     ruler: { enabled: false, dragging: false, from: null, to: null, measures: [] },
     poppedOut: false
   };
@@ -173,6 +174,37 @@
       background: #ed1941;
     }
     .chip--measure { background: #ed1941; color: #ffffff; }
+    .focus__path {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+      fill: none;
+      stroke: rgba(245, 158, 11, .85);
+      stroke-width: 1.5;
+      stroke-dasharray: 4 3;
+    }
+    .focus__frame {
+      position: fixed;
+      box-sizing: border-box;
+      border: 2px solid #f59e0b;
+      border-radius: 3px;
+    }
+    .focus__frame--positive { border-color: #ed1941; }
+    .focus__badge {
+      position: fixed;
+      min-width: 22px;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: #f59e0b;
+      color: #0b1220;
+      font-weight: 700;
+      text-align: center;
+      transform: translate(-50%, -50%);
+      box-shadow: 0 0 0 2px #0b1220;
+    }
+    .focus__badge--positive { background: #c8102e; color: #ffffff; }
     .track--item {
       border: 1px dashed rgba(16, 185, 129, .8);
       background: rgba(16, 185, 129, .05);
@@ -441,7 +473,7 @@
     style.textContent = STYLE;
     root.append(style);
 
-    ['pins', 'box', 'layout', 'distance', 'measure', 'labels'].forEach((name) => {
+    ['pins', 'box', 'layout', 'distance', 'measure', 'focus', 'labels'].forEach((name) => {
       layers[name] = el('div', 'layer');
       root.append(layers[name]);
     });
@@ -583,6 +615,86 @@
 
   function clear(layer) {
     while (layer.firstChild) layer.firstChild.remove();
+  }
+
+  const FOCUSABLE = 'a[href], area[href], button, input:not([type="hidden"]), select, textarea, iframe, summary, audio[controls], video[controls], [contenteditable]:not([contenteditable="false"]), [tabindex]';
+  let focusSignature = '';
+  let focusChecked = 0;
+
+  function inRadioTabOrder(node) {
+    if (node.type !== 'radio' || !node.name) return true;
+    const group = [...(node.form || document).querySelectorAll('input[type="radio"]')]
+      .filter((radio) => radio.name === node.name && !radio.disabled);
+    const checked = group.find((radio) => radio.checked);
+    return checked ? checked === node : group[0] === node;
+  }
+
+  function isTabStop(node) {
+    if (node.tabIndex < 0 || node.matches(':disabled') || node.closest('[inert]')) return false;
+    if (host?.contains(node)) return false;
+    const rect = node.getBoundingClientRect();
+    if (!rect.width && !rect.height) return false;
+    if (node.checkVisibility && !node.checkVisibility({ visibilityProperty: true })) return false;
+    return inRadioTabOrder(node);
+  }
+
+  function focusStops() {
+    const nodes = [...document.querySelectorAll(FOCUSABLE)].filter(isTabStop);
+    const positive = nodes.filter((node) => node.tabIndex > 0).sort((a, b) => a.tabIndex - b.tabIndex);
+    return positive.concat(nodes.filter((node) => node.tabIndex === 0)).slice(0, 1000);
+  }
+
+  function onScreen(rect) {
+    return rect.bottom >= 0 && rect.right >= 0 && rect.top <= innerHeight && rect.left <= innerWidth;
+  }
+
+  function drawFocusMap(stops) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'focus__path');
+    svg.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    path.setAttribute('points', stops.map(({ rect }) => `${rect.left + rect.width / 2},${rect.top + rect.height / 2}`).join(' '));
+    svg.append(path);
+    layers.focus.append(svg);
+
+    stops.forEach(({ node, rect }, index) => {
+      if (!onScreen(rect)) return;
+      const modifier = node.tabIndex > 0 ? ' focus__frame--positive' : '';
+      const frame = el('div', `focus__frame${modifier}`);
+      place(frame, rect);
+      const badge = el('span', `focus__badge${node.tabIndex > 0 ? ' focus__badge--positive' : ''}`, {
+        left: `${Math.max(rect.left, 12)}px`,
+        top: `${Math.max(rect.top, 12)}px`
+      });
+      badge.textContent = String(index + 1);
+      layers.focus.append(frame, badge);
+    });
+  }
+
+  function refreshFocusMap(force) {
+    if (!state.showFocusMap) {
+      focusSignature = '';
+      return;
+    }
+    const now = performance.now();
+    if (!force && now - focusChecked < 300) return;
+    focusChecked = now;
+    const stops = focusStops().map((node) => ({ node, rect: node.getBoundingClientRect() }));
+    const next = stops.map(({ rect }) => `${r1(rect.left)}:${r1(rect.top)}:${r1(rect.width)}:${r1(rect.height)}`).join('|') || '-';
+    if (!force && next === focusSignature) return;
+    focusSignature = next;
+    clear(layers.focus);
+    drawFocusMap(stops);
+  }
+
+  function toggleFocusMap() {
+    state.showFocusMap = !state.showFocusMap;
+    if (state.showFocusMap) {
+      const stops = focusStops();
+      const positive = stops.filter((node) => node.tabIndex > 0).length;
+      toast(`Focus map · ${stops.length} stops${positive ? ` · ${positive} with tabindex > 0` : ''}`);
+    } else toast('Focus map off');
+    invalidate();
   }
 
   function metrics(node) {
@@ -1270,7 +1382,8 @@
       button('btn', 'distances', 'distances', { pressed: state.showDistances }),
       button('btn', 'contrast', 'contrast', { pressed: state.showContrast }),
       button('btn', 'ruler', 'ruler', { icon: ICONS.ruler, pressed: state.ruler.enabled }),
-      button('btn', 'copy-on-click', 'click copies class', { pressed: state.copyOnClick })
+      button('btn', 'copy-on-click', 'click copies class', { pressed: state.copyOnClick }),
+      button('btn', 'focus-map', 'focus map', { pressed: state.showFocusMap })
     );
 
     const hoverSection = el('section', 'panel__section');
@@ -1401,6 +1514,7 @@
       ['D', 'distance'],
       ['A', 'contrast'],
       ['N', 'navigate'],
+      ['T', 'focus map'],
       ['Esc', 'exit']
     ].forEach(([key, description]) => {
       const term = el('dt', 'keys__key');
@@ -1429,6 +1543,7 @@
       state.showContrast,
       state.ruler.enabled,
       state.copyOnClick,
+      state.showFocusMap,
       state.pins.length,
       measurements().map(({ from, to }) => `${from.x}:${from.y}:${to.x}:${to.y}`).join(',') || '-'
     ];
@@ -1468,6 +1583,7 @@
     }
 
     drawRuler();
+    refreshFocusMap(true);
 
     if (hovered) drawTip(hovered);
     renderPanel();
@@ -1480,7 +1596,7 @@
     if (next !== lastSignature) {
       lastSignature = next;
       render();
-    }
+    } else refreshFocusMap(false);
     rafId = requestAnimationFrame(tick);
   }
 
@@ -1576,6 +1692,7 @@
     if (action === 'contrast') state.showContrast = !state.showContrast;
     if (action === 'ruler') setRulerEnabled(!state.ruler.enabled);
     if (action === 'copy-on-click') toggleCopyOnClick();
+    if (action === 'focus-map') toggleFocusMap();
     if (action === 'unpin') state.pins.splice(Number(index), 1);
     if (action === 'unmeasure') state.ruler.measures.splice(Number(index), 1);
     if (action === 'clear-measures') clearMeasures();
@@ -1621,6 +1738,7 @@
       showContrast: state.showContrast,
       rulerEnabled: state.ruler.enabled,
       copyOnClick: state.copyOnClick,
+      showFocusMap: state.showFocusMap,
       hovered: hovered ? { name: describe(hovered), classes: classNames(hovered), facts: factsFor(hovered) } : null,
       measures: measurements().map((measure) => ({ index: measure.index, facts: measureFacts(measure) })),
       pins: state.pins.map((pin) => {
@@ -1675,6 +1793,7 @@
     else if (key === 'd') { state.showDistances = !state.showDistances; invalidate(); }
     else if (key === 'a') { state.showContrast = !state.showContrast; invalidate(); }
     else if (key === 'n') toggleCopyOnClick();
+    else if (key === 't') toggleFocusMap();
     else return;
 
     event.preventDefault();

@@ -33,6 +33,10 @@ and lets you freeze elements to measure and compare against whatever you hover n
   doesn't trigger the page's own click. Turn **click copies class** off (or press `N`) to click links and
   navigate the page while the inspector keeps running. Hover stays put while the pointer is over the panel; freeze with `F` to keep it
   while you travel there.
+- **Focus map** (`T` or the **focus map** button): numbers every keyboard tab stop in the order Tab visits
+  them and joins them with a dashed path, so jumps in the focus order are visible at a glance. Stops with
+  `tabindex > 0` are marked red; hidden, disabled, `inert` and `tabindex="-1"` elements are left out, and a
+  radio group counts once.
 - **Frozen elements**: pin any element, then hover another — dashed rulers show the distance between them
   (edge deltas when they overlap or nest), and the panel lists Δ width / Δ height per frozen element.
 
@@ -66,6 +70,7 @@ PDFs opened from `file://` need **Allow access to file URLs** (extension details
 | `D` | distances |
 | `A` | contrast (a11y) on/off |
 | `N` | navigate: let clicks reach the page (toggles click-to-copy) |
+| `T` | focus map: numbered tab order |
 | `Esc` | exit |
 
 ## Look
