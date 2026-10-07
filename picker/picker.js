@@ -302,7 +302,7 @@ Object.entries(hexInputs).forEach(([role, input]) => {
   });
 });
 
-const view = { current: -1, fit: true, scale: CSS_PER_POINT, entries: [], generation: 0, initialised: false };
+const view = { current: -1, fit: true, scale: CSS_PER_POINT, entries: [], generation: 0, initialised: false, pendingCursor: null };
 
 function fitScale() {
   const widest = Math.max(...view.entries.map((entry) => entry.size.width));
@@ -336,9 +336,13 @@ async function renderEntry(entry, generation) {
   }
   if (generation !== view.generation) return;
   canvas.dataset.ready = 'true';
+  const pending = view.pendingCursor;
   if (!view.initialised) {
     view.initialised = true;
     moveCursor(canvas, Math.floor(canvas.width / 2), Math.floor(canvas.height / 2));
+  } else if (pending && view.entries[pending.index] === entry) {
+    view.pendingCursor = null;
+    if (!cursor) moveCursor(canvas, Math.floor(pending.fx * canvas.width), Math.floor(pending.fy * canvas.height));
   }
 }
 
@@ -357,6 +361,10 @@ function layout() {
   const generation = view.generation;
   const ratio = scroller.scrollHeight ? scroller.scrollTop / scroller.scrollHeight : 0;
 
+  if (cursor) {
+    const index = view.entries.findIndex((entry) => entry.canvas === cursor.canvas);
+    if (index !== -1) view.pendingCursor = { index, fx: cursor.x / cursor.canvas.width, fy: cursor.y / cursor.canvas.height };
+  }
   cursor = null;
   marker.hidden = true;
   view.entries.forEach((entry) => {
@@ -488,7 +496,7 @@ function updateCurrentPage() {
     const active = index === current;
     button.classList.toggle('thumb--current', active);
     if (active) {
-      button.setAttribute('aria-current', 'true');
+      button.setAttribute('aria-current', 'page');
       const from = thumbsNode.scrollTop;
       const to = from + thumbsNode.clientHeight;
       if (button.offsetTop < from || button.offsetTop + button.offsetHeight > to) thumbsNode.scrollTop = button.offsetTop - 8;
@@ -647,6 +655,7 @@ async function runSearch(query) {
 }
 
 async function stepMatch(direction) {
+  clearTimeout(searchTimer);
   if (searchInput.value !== search.query) await runSearch(searchInput.value);
   else showMatch(search.current + direction);
 }
@@ -665,6 +674,7 @@ searchInput.addEventListener('keydown', (event) => {
 
 searchForm.addEventListener('submit', (event) => {
   event.preventDefault();
+  clearTimeout(searchTimer);
   if (searchInput.value !== search.query) runSearch(searchInput.value);
   else stepMatch(1);
 });
@@ -724,10 +734,6 @@ if ('EyeDropper' in window) {
   });
 }
 
-window.addEventListener('pagehide', () => {
-  if (shotKey) chrome.storage.local.remove(shotKey);
-});
-
 function addCanvas() {
   const wrap = document.createElement('div');
   wrap.className = 'stage__page';
@@ -767,6 +773,7 @@ function clearView() {
   view.entries = [];
   view.current = -1;
   view.initialised = false;
+  view.pendingCursor = null;
   pages.splice(0).forEach((canvas) => canvas.parentElement.remove());
   thumbList.replaceChildren();
   search.matches = [];

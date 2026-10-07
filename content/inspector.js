@@ -1,22 +1,61 @@
 (() => {
-  if (window.__layoutRuler) return;
+  const previous = window.__layoutRuler;
+  if (previous?.alive?.()) return;
+  try {
+    previous?.deactivate?.();
+  } catch (error) {
+    /* the previous instance lost its extension context */
+  }
+  document.getElementById('layout-ruler-host')?.remove();
+  document.getElementById('layout-ruler-design')?.remove();
 
+  const Panel = globalThis.LayoutRulerPanel;
   const PIN_COLORS = ['#0ea5e9', '#7c3aed', '#059669', '#d97706', '#2563eb', '#db2777'];
   const SNAP = 6;
   const px = (value) => parseFloat(value) || 0;
   const r1 = (value) => Math.round(value * 10) / 10;
+  const idle = (callback) => (window.requestIdleCallback ? requestIdleCallback(callback, { timeout: 600 }) : setTimeout(callback, 1));
+
+  const TOGGLES = {
+    layout: 'showLayout',
+    contrast: 'showContrast',
+    'copy-on-click': 'copyOnClick',
+    'focus-map': 'showFocusMap',
+    a11y: 'showA11y',
+    headings: 'showHeadings',
+    overflow: 'showOverflow',
+    'layout-grid': 'showGrid',
+    'grid-ruler': 'showGridRuler',
+    design: 'showDesign',
+    spacing: 'showSpacing'
+  };
+
+  const DEFAULT_PRESETS = [
+    { name: 'mobile', minWidth: 0, columns: 4, gutter: 16, margin: 16, maxWidth: null },
+    { name: 'tablet', minWidth: 768, columns: 8, gutter: 24, margin: 32, maxWidth: null },
+    { name: 'desktop', minWidth: 1024, columns: 12, gutter: 24, margin: 40, maxWidth: 1440 }
+  ];
 
   const state = {
     active: false,
+    claimed: false,
     hovered: null,
     locked: false,
     pins: [],
-    showHover: false,
-    showLayout: false,
-    showDistances: false,
-    showContrast: false,
-    copyOnClick: false,
+    showLayout: true,
+    showContrast: true,
+    copyOnClick: true,
     showFocusMap: false,
+    showA11y: false,
+    showHeadings: false,
+    showOverflow: false,
+    showGrid: false,
+    showGridRuler: false,
+    showDesign: false,
+    showSpacing: false,
+    spacingBase: 4,
+    presets: DEFAULT_PRESETS.map((preset) => ({ ...preset })),
+    design: { has: false, opacity: 50, x: 0, y: 0, scale: '1', scroll: true, blend: false },
     ruler: { enabled: false, dragging: false, from: null, to: null, measures: [] },
     poppedOut: false
   };
@@ -26,33 +65,35 @@
   let panelBody = null;
   let toastNode = null;
   let captureNode = null;
+  let designHost = null;
+  let designCanvas = null;
+  let designImage = null;
+  let rootBackground = null;
+  let building = null;
   const drag = { active: false, offsetX: 0, offsetY: 0 };
   let toastTimer = 0;
   let rafId = 0;
   let lastSignature = '';
   let lastPush = 0;
+  let pushTimer = 0;
+  let pendingSnapshot = null;
+  let saveTimer = 0;
+  let gridTimer = 0;
   const layers = {};
-
-  const ICONS = {
-    close: 'M6 18 18 6M6 6l12 12',
-    copy: 'M15.666 3.888A2.25 2.25 0 0 0 13.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 0 1-.75.75H9a.75.75 0 0 1-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 0 1-2.25 2.25H6.75A2.25 2.25 0 0 1 4.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 0 1 1.927-.184',
-    ruler: 'M7.5 21 3 16.5m0 0L7.5 12m-4.5 4.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5',
-    popout: 'M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25',
-    download: 'M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3',
-    trash: 'm14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.2v.916m7.5 0a48.667 48.667 0 0 0-7.5 0'
-  };
 
   const FONT_HREF = 'https://fonts.googleapis.com/css2?family=Dongle&family=Elms+Sans:ital,wght@0,100..900;1,100..900&family=Manrope:wght@200..800&display=swap';
   const FONT_STACK = `'Manrope', 'Elms Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif`;
 
   const STYLE = `
     :host {
+      all: initial;
       position: fixed;
       inset: 0;
       z-index: 2147483647;
       pointer-events: none;
       color-scheme: dark;
     }
+    :host([hidden]) { display: none; }
     .layer {
       position: fixed;
       inset: 0;
@@ -82,6 +123,8 @@
       box-shadow: 0 1px 3px rgba(2, 6, 23, .4);
     }
     .chip--track { background: rgba(217, 70, 239, .95); }
+    .chip--warn { background: #b45309; color: #ffffff; }
+    .chip--viewport { background: #c8102e; color: #ffffff; }
     .tip {
       position: fixed;
       display: grid;
@@ -96,9 +139,7 @@
     .tip__name { color: #f87a90; word-break: break-all; }
     .tip__size { color: #fcd34d; }
     .tip__row { color: #cbd5e1; }
-    .tip__key { color: #94a3b8; }
-    .tip__row--issue { color: #fcd34d; }
-    .tip--focus { box-shadow: 0 0 0 2px #f59e0b, 0 12px 28px rgba(2, 6, 23, .45); }
+    .tip__hint { color: #fcd34d; }
     .rule {
       position: fixed;
       border-color: currentColor;
@@ -144,6 +185,26 @@
     .track--gap {
       border-style: none;
       background: rgba(217, 70, 239, .22);
+    }
+    .track--item {
+      border: 1px dashed rgba(16, 185, 129, .8);
+      background: rgba(16, 185, 129, .05);
+    }
+    .gridcol {
+      position: fixed;
+      top: 0;
+      bottom: 0;
+      box-sizing: border-box;
+      border-inline: 1px solid rgba(237, 25, 65, .35);
+      background: rgba(237, 25, 65, .07);
+    }
+    .gridruler {
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(to right, rgba(0, 0, 0, .2) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(0, 0, 0, .2) 1px, transparent 1px);
+      background-size: 37.8px 37.8px;
     }
     .capture {
       position: fixed;
@@ -196,7 +257,8 @@
       border-radius: 3px;
     }
     .focus__frame--positive { border-color: #ed1941; }
-    .focus__badge {
+    .focus__frame--small { border-style: dotted; }
+    .badge {
       position: fixed;
       min-width: 22px;
       padding: 0 6px;
@@ -205,206 +267,30 @@
       color: #0b1220;
       font-weight: 700;
       text-align: center;
-      transform: translate(-50%, -50%);
+      white-space: nowrap;
       box-shadow: 0 0 0 2px #0b1220;
     }
-    .focus__badge--positive { background: #c8102e; color: #ffffff; }
-    .track--item {
-      border: 1px dashed rgba(16, 185, 129, .8);
-      background: rgba(16, 185, 129, .05);
-    }
-    .panel {
+    .badge--center { transform: translate(-50%, -50%); }
+    .badge--positive { background: #c8102e; color: #ffffff; }
+    .badge--heading { background: #0f766e; color: #ffffff; }
+    .badge--landmark { background: #7e22ce; color: #ffffff; }
+    .badge--overflow { background: #b91c1c; color: #ffffff; }
+    .badge--clips { background: #b45309; color: #ffffff; }
+    .outline__frame {
       position: fixed;
-      right: 16px;
-      bottom: 16px;
-      display: grid;
-      gap: 12px;
-      align-content: start;
-      width: 360px;
-      max-height: 74vh;
-      padding: 16px;
-      overflow: auto;
-      border-radius: 14px;
-      background: #0b1220;
-      color: #e2e8f0;
-      font: 400 14px/1.5 ${FONT_STACK};
-      box-shadow: 0 0 0 1px rgba(148, 163, 184, .14), 0 18px 40px rgba(2, 6, 23, .5);
-      pointer-events: auto;
+      box-sizing: border-box;
+      border: 2px dashed #14b8a6;
     }
-    .panel__head {
-      cursor: grab;
-      user-select: none;
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto auto;
-      align-items: center;
-      gap: 2px;
+    .outline__frame--landmark { border: 2px solid #a855f7; }
+    .overflow__frame {
+      position: fixed;
+      box-sizing: border-box;
+      border: 2px dashed #ef4444;
     }
-    .panel__title {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      margin: 0;
-      font-size: 14px;
-      font-weight: 600;
-      letter-spacing: -.01em;
-      color: #f1f5f9;
-    }
-    .panel--dragging, .panel--dragging .panel__head { cursor: grabbing; }
-    .panel__dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 999px;
-      background: #ed1941;
-    }
-    .panel__close {
-      display: grid;
-      place-items: center;
-      width: 28px;
-      height: 28px;
-      border: 0;
-      border-radius: 8px;
-      background: transparent;
-      color: #94a3b8;
-      cursor: pointer;
-    }
-    .panel__close:hover { background: #16223a; color: #f1f5f9; }
-    .panel__row { display: flex; flex-wrap: wrap; gap: 6px; }
-    .panel__section { display: grid; gap: 7px; }
-    .panel__label {
-      margin: 0;
-      font-size: 14px;
-      font-weight: 600;
-      letter-spacing: .02em;
-      color: #94a3b8;
-    }
-    .panel__empty { margin: 0; color: #94a3b8; }
-    .panel__divider { height: 1px; background: rgba(148, 163, 184, .14); }
-    .icon {
-      width: 16px;
-      height: 16px;
-      flex: none;
-    }
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 5px 11px;
-      border: 1px solid rgba(148, 163, 184, .22);
-      border-radius: 9px;
-      background: transparent;
-      color: #cbd5e1;
-      font: 500 14px/1.4 ${FONT_STACK};
-      cursor: pointer;
-      transition: background-color .12s ease, border-color .12s ease, color .12s ease;
-    }
-    .btn:hover { background: #16223a; color: #f1f5f9; }
-    .btn[aria-pressed="true"] {
-      border-color: rgba(237, 25, 65, .55);
-      background: rgba(237, 25, 65, .14);
-      color: #f87a90;
-    }
-    .btn--primary {
-      border-color: #ed1941;
-      background: #ed1941;
-      color: #ffffff;
-    }
-    .btn--primary:hover { background: #f43f5e; border-color: #f43f5e; color: #ffffff; }
-    .name {
-      display: block;
-      margin: 0;
-      color: #f87a90;
-      font-size: 14px;
-      word-break: break-all;
-    }
-    .facts {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr);
-      gap: 3px 14px;
-      margin: 0;
-      font-size: 14px;
-      font-variant-numeric: tabular-nums;
-    }
-    .facts__key { color: #94a3b8; }
-    .facts__value { margin: 0; color: #e2e8f0; word-break: break-all; }
-    .classes {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 4px;
-      margin: 0;
-      padding: 0;
-      list-style: none;
-    }
-    .classes__copy {
-      min-height: 24px;
-      padding: 1px 8px;
-      border: 1px solid rgba(248, 122, 144, .35);
-      border-radius: 6px;
-      background: transparent;
-      color: #f87a90;
-      font: 500 14px/1.4 ${FONT_STACK};
-      word-break: break-all;
-      cursor: copy;
-    }
-    .classes__copy:hover { background: rgba(237, 25, 65, .14); color: #f1f5f9; }
-    .pins { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
-    .pins__item {
-      display: grid;
-      grid-template-columns: 8px minmax(0, 1fr) auto;
-      align-items: start;
-      gap: 10px;
-      padding: 9px 10px;
-      border: 1px solid rgba(148, 163, 184, .14);
-      border-radius: 10px;
-      background: #101a2d;
-    }
-    .pins__swatch {
-      width: 8px;
-      height: 8px;
-      margin-top: 7px;
-      border-radius: 999px;
-      background: currentColor;
-    }
-    .pins__meta {
-      margin: 0;
-      color: #cbd5e1;
-      font-size: 14px;
-      font-variant-numeric: tabular-nums;
-    }
-    .pins__delta { color: #fcd34d; }
-    .pins__remove {
-      display: grid;
-      place-items: center;
-      width: 24px;
-      height: 24px;
-      border: 0;
-      border-radius: 7px;
-      background: transparent;
-      color: #94a3b8;
-      cursor: pointer;
-    }
-    .pins__remove:hover { background: #16223a; color: #f1f5f9; }
-    .keys {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
-      align-items: center;
-      gap: 5px 10px;
-      margin: 0;
-      font-size: 14px;
-      color: #94a3b8;
-    }
-    .keys__key {
-      justify-self: start;
-      padding: 1px 7px;
-      border: 1px solid rgba(148, 163, 184, .22);
-      border-radius: 6px;
-      background: #101a2d;
-      color: #cbd5e1;
-      font-size: 14px;
-    }
-    .keys__value { margin: 0; }
+    .overflow__frame--clips { border: 2px dotted #f59e0b; }
     .toast {
       position: fixed;
-      right: 392px;
+      right: 16px;
       bottom: 16px;
       padding: 8px 14px;
       border-radius: 999px;
@@ -418,13 +304,24 @@
       pointer-events: none;
     }
     .toast--visible { opacity: 1; transform: translateY(0); }
-    .is-hidden { display: none; }
     @media (prefers-reduced-motion: reduce) {
-      .btn, .toast { transition: none; }
+      .toast { transition: none; }
     }
-    button:focus-visible {
-      outline: 2px solid #f87a90;
-      outline-offset: 2px;
+  `;
+
+  const DESIGN_STYLE = `
+    :host {
+      all: initial;
+      position: fixed;
+      inset: 0;
+      z-index: 2147483647;
+      pointer-events: none;
+    }
+    :host([hidden]) { display: none; }
+    canvas {
+      position: absolute;
+      left: 0;
+      top: 0;
     }
   `;
 
@@ -449,24 +346,16 @@
     });
   }
 
-  function icon(path) {
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('class', 'icon');
-    svg.setAttribute('viewBox', '0 0 24 24');
-    svg.setAttribute('fill', 'none');
-    svg.setAttribute('stroke', 'currentColor');
-    svg.setAttribute('stroke-width', '1.5');
-    svg.setAttribute('aria-hidden', 'true');
-    svg.setAttribute('focusable', 'false');
-    const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    shape.setAttribute('stroke-linecap', 'round');
-    shape.setAttribute('stroke-linejoin', 'round');
-    shape.setAttribute('d', path);
-    svg.append(shape);
-    return svg;
+  async function panelCss() {
+    try {
+      const response = await fetch(chrome.runtime.getURL('panel/panel.css'));
+      return await response.text();
+    } catch (error) {
+      return '';
+    }
   }
 
-  function build() {
+  async function build() {
     loadFonts();
 
     host = el('div');
@@ -477,7 +366,7 @@
     style.textContent = STYLE;
     root.append(style);
 
-    ['pins', 'box', 'layout', 'distance', 'measure', 'focus', 'labels'].forEach((name) => {
+    ['grid', 'pins', 'box', 'layout', 'distance', 'measure', 'focus', 'headings', 'overflow', 'labels'].forEach((name) => {
       layers[name] = el('div', 'layer');
       root.append(layers[name]);
     });
@@ -486,9 +375,9 @@
     captureNode.addEventListener('mousedown', onRulerDown);
     root.append(captureNode);
 
-    panelBody = el('aside', 'panel');
+    panelBody = el('aside', 'panel panel--page panel--loading');
     panelBody.setAttribute('aria-label', 'Layout Ruler');
-    panelBody.addEventListener('click', onPanelClick);
+    Panel.bind(panelBody, dispatchLocal);
     panelBody.addEventListener('mousedown', onPanelDown);
     root.append(panelBody);
 
@@ -496,12 +385,71 @@
     toastNode.setAttribute('aria-live', 'polite');
     root.append(toastNode);
 
-    document.documentElement.append(host);
+    designHost = el('div');
+    designHost.id = 'layout-ruler-design';
+    const designRoot = designHost.attachShadow({ mode: 'open' });
+    const designStyle = document.createElement('style');
+    designStyle.textContent = DESIGN_STYLE;
+    designCanvas = document.createElement('canvas');
+    designCanvas.hidden = true;
+    designRoot.append(designStyle, designCanvas);
+
+    document.documentElement.append(designHost, host);
+
+    style.textContent = STYLE + await panelCss();
+    panelBody.classList.remove('panel--loading');
   }
 
   function topElementAt(x, y) {
-    return document.elementsFromPoint(x, y).find((node) => node !== host && node !== document.documentElement) || null;
+    return document.elementsFromPoint(x, y)
+      .find((node) => node !== host && node !== designHost && node !== document.documentElement) || null;
   }
+
+  function isFrame(node) {
+    return /^(IFRAME|FRAME)$/.test(node?.tagName || '');
+  }
+
+  /* ---------- settings ---------- */
+
+  const settingsReady = chrome.storage.sync.get('settings')
+    .then(({ settings }) => {
+      if (!settings) return;
+      Object.values(TOGGLES).forEach((key) => {
+        if (typeof settings.toggles?.[key] === 'boolean') state[key] = settings.toggles[key];
+      });
+      if (settings.spacingBase > 0) state.spacingBase = settings.spacingBase;
+    })
+    .catch(() => {});
+
+  function saveSettings() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      const toggles = Object.fromEntries(Object.values(TOGGLES).map((key) => [key, state[key]]));
+      chrome.storage.sync.set({ settings: { toggles, spacingBase: state.spacingBase } }).catch(() => {});
+    }, 500);
+  }
+
+  const gridKey = () => `grid:${location.origin}`;
+
+  async function loadPresets() {
+    try {
+      const stored = await chrome.storage.local.get(gridKey());
+      const presets = stored[gridKey()];
+      state.presets = Array.isArray(presets) && presets.length ? presets : DEFAULT_PRESETS.map((preset) => ({ ...preset }));
+    } catch (error) {
+      /* keep defaults */
+    }
+  }
+
+  function savePresets() {
+    clearTimeout(gridTimer);
+    gridTimer = setTimeout(() => chrome.storage.local.set({ [gridKey()]: state.presets }).catch(() => {}), 400);
+  }
+
+  /* ---------- ruler ---------- */
+
+  const toPage = (point) => ({ x: point.x + scrollX, y: point.y + scrollY });
+  const toView = (point) => ({ x: point.x - scrollX, y: point.y - scrollY });
 
   function snapPoint(x, y, origin, constrain) {
     let point = { x, y };
@@ -532,7 +480,7 @@
   function onRulerDown(event) {
     if (!state.ruler.enabled || event.button !== 0) return;
     event.preventDefault();
-    const start = snapPoint(event.clientX, event.clientY, { x: event.clientX, y: event.clientY }, false);
+    const start = toPage(snapPoint(event.clientX, event.clientY, { x: event.clientX, y: event.clientY }, false));
     state.ruler.from = start;
     state.ruler.to = start;
     state.ruler.dragging = true;
@@ -541,7 +489,7 @@
 
   function onRulerMove(event) {
     if (!state.ruler.dragging) return;
-    state.ruler.to = snapPoint(event.clientX, event.clientY, state.ruler.from, event.shiftKey);
+    state.ruler.to = toPage(snapPoint(event.clientX, event.clientY, toView(state.ruler.from), event.shiftKey));
     invalidate();
   }
 
@@ -560,7 +508,7 @@
   function measureMetrics({ from, to }, index) {
     const dx = to.x - from.x;
     const dy = to.y - from.y;
-    return { from, to, dx, dy, length: Math.hypot(dx, dy), index };
+    return { from: toView(from), to: toView(to), dx, dy, length: Math.hypot(dx, dy), index };
   }
 
   function measurements() {
@@ -621,9 +569,241 @@
     while (layer.firstChild) layer.firstChild.remove();
   }
 
+  /* ---------- accessibility ---------- */
+
+  const INTERACTIVE_ROLES = new Set(['button', 'link', 'checkbox', 'radio', 'switch', 'textbox', 'searchbox', 'combobox', 'listbox', 'slider', 'spinbutton', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'treeitem']);
+  const NAME_FROM_CONTENT = new Set(['button', 'cell', 'checkbox', 'columnheader', 'gridcell', 'heading', 'link', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'radio', 'row', 'rowheader', 'switch', 'tab', 'tooltip', 'treeitem', 'summary']);
+  const LANDMARK_ROLES = new Set(['banner', 'navigation', 'main', 'complementary', 'contentinfo', 'region', 'form', 'search']);
+  const SECTIONING = 'article, aside, main, nav, section, [role="article"], [role="complementary"], [role="main"], [role="navigation"], [role="region"]';
+  const normalise = (text) => (text || '').replace(/\s+/g, ' ').trim();
+
+  function inputRole(node) {
+    const type = (node.getAttribute('type') || 'text').toLowerCase();
+    if (/^(button|submit|reset|image)$/.test(type)) return 'button';
+    if (type === 'checkbox') return node.getAttribute('switch') !== null ? 'switch' : 'checkbox';
+    if (type === 'radio') return 'radio';
+    if (type === 'range') return 'slider';
+    if (type === 'number') return 'spinbutton';
+    if (type === 'hidden') return 'none';
+    if (node.hasAttribute('list')) return 'combobox';
+    if (type === 'search') return 'searchbox';
+    if (/^(text|email|tel|url|password)$/.test(type)) return 'textbox';
+    return type;
+  }
+
+  function implicitRole(node) {
+    const tag = node.tagName.toLowerCase();
+    if (/^h[1-6]$/.test(tag)) return 'heading';
+    switch (tag) {
+      case 'a':
+      case 'area':
+        return node.hasAttribute('href') ? 'link' : 'generic';
+      case 'button': return 'button';
+      case 'input': return inputRole(node);
+      case 'select': return node.multiple || node.size > 1 ? 'listbox' : 'combobox';
+      case 'textarea': return 'textbox';
+      case 'img': return node.getAttribute('alt') === '' ? 'presentation' : 'img';
+      case 'nav': return 'navigation';
+      case 'main': return 'main';
+      case 'search': return 'search';
+      case 'aside': return node.parentElement?.closest(SECTIONING) && !hasOwnLabel(node) ? 'generic' : 'complementary';
+      case 'header': return node.parentElement?.closest(SECTIONING) ? 'generic' : 'banner';
+      case 'footer': return node.parentElement?.closest(SECTIONING) ? 'generic' : 'contentinfo';
+      case 'section': return hasOwnLabel(node) ? 'region' : 'generic';
+      case 'form': return hasOwnLabel(node) ? 'form' : 'generic';
+      case 'ul':
+      case 'ol':
+      case 'menu':
+        return 'list';
+      case 'li': return 'listitem';
+      case 'table': return 'table';
+      case 'tr': return 'row';
+      case 'td': return 'cell';
+      case 'th': return node.closest('thead') || node.getAttribute('scope') === 'col' ? 'columnheader' : 'rowheader';
+      case 'dialog': return 'dialog';
+      case 'details': return 'group';
+      case 'summary': return 'summary';
+      case 'fieldset': return 'group';
+      case 'figure': return 'figure';
+      case 'p': return 'paragraph';
+      case 'hr': return 'separator';
+      case 'progress': return 'progressbar';
+      case 'meter': return 'meter';
+      case 'output': return 'status';
+      case 'option': return 'option';
+      case 'iframe': return 'iframe';
+      case 'svg': return 'graphics-document';
+      default: return 'generic';
+    }
+  }
+
+  function hasOwnLabel(node) {
+    return Boolean(normalise(node.getAttribute('aria-label')) || node.getAttribute('aria-labelledby')?.trim() || normalise(node.getAttribute('title')));
+  }
+
+  function roleOf(node) {
+    const explicit = node.getAttribute('role')?.trim().split(/\s+/)[0];
+    return explicit || implicitRole(node);
+  }
+
+  function hiddenFromAT(node) {
+    if (node.closest('[aria-hidden="true"], [hidden]')) return true;
+    return node.checkVisibility ? !node.checkVisibility({ visibilityProperty: true }) : false;
+  }
+
+  function pseudoText(node, which) {
+    const content = getComputedStyle(node, which).content;
+    if (!content || content === 'none' || content === 'normal') return '';
+    const match = content.match(/^"(.*)"$/);
+    return match ? match[1] : '';
+  }
+
+  function contentText(node, budget = { elements: 400 }) {
+    let text = pseudoText(node, '::before');
+    node.childNodes.forEach((child) => {
+      if (child.nodeType === 3) {
+        text += child.nodeValue;
+        return;
+      }
+      if (child.nodeType !== 1 || child === host || budget.elements <= 0) return;
+      budget.elements -= 1;
+      if (hiddenFromAT(child)) return;
+      const label = normalise(child.getAttribute('aria-label'));
+      let part;
+      if (label) part = label;
+      else if (child.tagName === 'IMG' || (child.tagName === 'INPUT' && child.type === 'image')) part = child.getAttribute('alt') || '';
+      else if (/^(INPUT|TEXTAREA)$/.test(child.tagName)) part = child.value || '';
+      else if (child.tagName === 'SELECT') part = child.selectedOptions?.[0]?.textContent || '';
+      else part = contentText(child, budget);
+      const block = !/^inline/.test(getComputedStyle(child).display);
+      text += block ? ` ${part} ` : part;
+    });
+    return normalise(text + pseudoText(node, '::after'));
+  }
+
+  function referencedText(node, attribute) {
+    const ids = node.getAttribute(attribute)?.trim().split(/\s+/).filter(Boolean) || [];
+    return normalise(ids.map((id) => {
+      const target = document.getElementById(id);
+      if (!target) return '';
+      return normalise(target.getAttribute('aria-label')) || contentText(target);
+    }).join(' '));
+  }
+
+  function nativeName(node, role) {
+    const tag = node.tagName;
+    if (tag === 'INPUT') {
+      const type = (node.type || 'text').toLowerCase();
+      if (/^(button|submit|reset)$/.test(type)) {
+        return { name: node.value || (type === 'submit' ? 'Submit' : type === 'reset' ? 'Reset' : ''), source: 'value' };
+      }
+      if (type === 'image') return { name: node.getAttribute('alt') || '', source: 'alt' };
+    }
+    if (/^(INPUT|SELECT|TEXTAREA|METER|PROGRESS|OUTPUT)$/.test(tag) && node.labels?.length) {
+      return { name: normalise([...node.labels].map((label) => contentText(label)).join(' ')), source: 'label' };
+    }
+    if ((tag === 'IMG' || tag === 'AREA') && node.hasAttribute('alt')) return { name: normalise(node.getAttribute('alt')), source: 'alt' };
+    if (tag === 'FIELDSET') {
+      const legend = node.querySelector(':scope > legend');
+      if (legend) return { name: contentText(legend), source: 'legend' };
+    }
+    if (tag === 'FIGURE') {
+      const caption = node.querySelector(':scope > figcaption');
+      if (caption) return { name: contentText(caption), source: 'figcaption' };
+    }
+    if (tag === 'TABLE' && node.caption) return { name: contentText(node.caption), source: 'caption' };
+    if (tag.toLowerCase() === 'svg') {
+      const title = node.querySelector(':scope > title');
+      if (title) return { name: normalise(title.textContent), source: '<title>' };
+    }
+    if (role === 'summary' || NAME_FROM_CONTENT.has(role)) return { name: contentText(node), source: 'content' };
+    return { name: '', source: 'none' };
+  }
+
+  function accessibleName(node) {
+    const role = roleOf(node);
+    const labelledBy = referencedText(node, 'aria-labelledby');
+    if (labelledBy) return { name: labelledBy, source: 'aria-labelledby' };
+    const label = normalise(node.getAttribute('aria-label'));
+    if (label) return { name: label, source: 'aria-label' };
+    const native = nativeName(node, role);
+    if (native.name) return native;
+    const title = normalise(node.getAttribute('title'));
+    if (title) return { name: title, source: 'title' };
+    const placeholder = normalise(node.getAttribute('placeholder'));
+    if (placeholder) return { name: placeholder, source: 'placeholder' };
+    return { name: '', source: 'none' };
+  }
+
+  function headingLevel(node) {
+    const level = Number(node.getAttribute('aria-level'));
+    if (level > 0) return level;
+    const match = node.tagName.match(/^H([1-6])$/);
+    return match ? Number(match[1]) : 2;
+  }
+
+  function isFocusable(node) {
+    return node.tabIndex >= 0 && !node.matches(':disabled') && !node.closest('[inert]');
+  }
+
+  function statesOf(node) {
+    const states = [];
+    ['expanded', 'pressed', 'checked', 'selected', 'current', 'invalid', 'haspopup'].forEach((name) => {
+      const value = node.getAttribute(`aria-${name}`);
+      if (value !== null) states.push(`${name}=${value}`);
+    });
+    if (node.matches('input[type="checkbox"], input[type="radio"]') && !node.hasAttribute('aria-checked')) states.push(`checked=${node.checked}`);
+    if (node.matches(':disabled') || node.getAttribute('aria-disabled') === 'true') states.push('disabled');
+    if (node.required || node.getAttribute('aria-required') === 'true') states.push('required');
+    if (node.closest('[aria-hidden="true"]')) states.push('aria-hidden');
+    if (node.hasAttribute('tabindex')) states.push(`tabindex=${node.getAttribute('tabindex')}`);
+    if (isFocusable(node)) states.push('focusable');
+    return states;
+  }
+
+  function accessibility(node) {
+    const role = roleOf(node);
+    const { name, source } = accessibleName(node);
+    const description = referencedText(node, 'aria-describedby') || (source !== 'title' ? normalise(node.getAttribute('title')) : '');
+    const rect = node.getBoundingClientRect();
+    const interactive = INTERACTIVE_ROLES.has(role) || (isFocusable(node) && node !== document.body);
+    const inline = /^inline/.test(getComputedStyle(node).display) && role === 'link';
+    const facts = [
+      ['role', role === 'heading' ? `heading level ${headingLevel(node)}` : role],
+      ['name', name ? `“${name}”` : '(none)'],
+      ['name from', source]
+    ];
+    if (description) facts.push(['description', `“${description}”`]);
+    const states = statesOf(node);
+    if (states.length) facts.push(['states', states.join(', ')]);
+
+    const flags = [];
+    if (interactive) {
+      const small = rect.width < 24 || rect.height < 24;
+      const status = small
+        ? (inline ? 'under 24×24, inline link exception applies' : 'under 24×24 (2.5.8)')
+        : rect.width < 44 || rect.height < 44 ? 'meets 24×24, under 44×44 (AAA 2.5.5)' : 'meets 44×44';
+      facts.push(['target', `${r1(rect.width)} × ${r1(rect.height)} · ${status}`]);
+      if (small && !inline) flags.push(`Target ${r1(rect.width)}×${r1(rect.height)} is under 24×24 (2.5.8). Check the spacing exception.`);
+      if (!name) flags.push('Interactive element with no accessible name.');
+    }
+    const label = normalise(node.getAttribute('aria-label'));
+    const visible = label ? contentText(node) : '';
+    if (visible && !label.toLowerCase().includes(visible.toLowerCase())) {
+      flags.push(`aria-label “${label}” does not contain the visible text “${visible}” (2.5.3 Label in Name).`);
+    }
+    if (node.closest('[aria-hidden="true"]') && (isFocusable(node) || node.querySelector('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'))) {
+      flags.push('aria-hidden on a focusable element, or one containing focusable elements.');
+    }
+    if (node.tabIndex > 0) flags.push(`tabindex=${node.tabIndex} changes the focus order.`);
+    if (node.tagName === 'IMG' && !node.hasAttribute('alt')) flags.push('img has no alt attribute.');
+    if (role === 'heading' && !name) flags.push('Empty heading.');
+    return { facts, flags, role, name };
+  }
+
+  /* ---------- maps: focus order, headings & landmarks, overflow ---------- */
+
   const FOCUSABLE = 'a[href], area[href], button, input:not([type="hidden"]), select, textarea, iframe, summary, audio[controls], video[controls], [contenteditable]:not([contenteditable="false"]), [tabindex]';
-  let focusSignature = '';
-  let focusChecked = 0;
 
   function inRadioTabOrder(node) {
     if (node.type !== 'radio' || !node.name) return true;
@@ -652,273 +832,281 @@
     return rect.bottom >= 0 && rect.right >= 0 && rect.top <= innerHeight && rect.left <= innerWidth;
   }
 
-  function drawFocusMap(stops) {
+  function isSmallTarget(rect) {
+    return rect.width < 24 || rect.height < 24;
+  }
+
+  function place(node, box) {
+    Object.assign(node.style, {
+      left: `${box.left}px`,
+      top: `${box.top}px`,
+      width: `${Math.max(box.width, 0)}px`,
+      height: `${Math.max(box.height, 0)}px`
+    });
+  }
+
+  function badge(layer, text, x, y, modifier, centred) {
+    const node = el('span', `badge${modifier ? ` badge--${modifier}` : ''}${centred ? ' badge--center' : ''}`, {
+      left: `${x}px`,
+      top: `${y}px`
+    });
+    node.textContent = text;
+    layer.append(node);
+    return node;
+  }
+
+  function drawFocusMap(items, layer) {
+    const rects = items.map(({ node }) => node.getBoundingClientRect());
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('class', 'focus__path');
     svg.setAttribute('aria-hidden', 'true');
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-    path.setAttribute('points', stops.map(({ rect }) => `${rect.left + rect.width / 2},${rect.top + rect.height / 2}`).join(' '));
+    path.setAttribute('points', rects.map((rect) => `${rect.left + rect.width / 2},${rect.top + rect.height / 2}`).join(' '));
     svg.append(path);
-    layers.focus.append(svg);
+    layer.append(svg);
 
-    stops.forEach(({ node, rect }, index) => {
+    items.forEach(({ node }, index) => {
+      const rect = rects[index];
       if (!onScreen(rect)) return;
-      const modifier = node.tabIndex > 0 ? ' focus__frame--positive' : '';
-      const frame = el('div', `focus__frame${modifier}`);
+      const positive = node.tabIndex > 0;
+      const frame = el('div', `focus__frame${positive ? ' focus__frame--positive' : ''}${isSmallTarget(rect) ? ' focus__frame--small' : ''}`);
       place(frame, rect);
-      const badge = el('span', `focus__badge${node.tabIndex > 0 ? ' focus__badge--positive' : ''}`, {
-        left: `${Math.max(rect.left, 12)}px`,
-        top: `${Math.max(rect.top, 12)}px`
-      });
-      badge.textContent = String(index + 1);
-      layers.focus.append(frame, badge);
+      layer.append(frame);
+      badge(layer, String(index + 1), Math.max(rect.left, 12), Math.max(rect.top, 12), positive ? 'positive' : '', true);
     });
   }
 
-  function refreshFocusMap(force) {
-    if (!state.showFocusMap) {
-      focusSignature = '';
+  function scanOutline() {
+    const headings = [...document.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]')]
+      .filter((node) => !hiddenFromAT(node) && roleOf(node) === 'heading')
+      .slice(0, 400)
+      .map((node) => ({ node, kind: 'heading', level: headingLevel(node), text: accessibleName(node).name }));
+    const landmarks = [...document.querySelectorAll('header, footer, nav, main, aside, section, form, search, [role]')]
+      .filter((node) => LANDMARK_ROLES.has(roleOf(node)) && !hiddenFromAT(node))
+      .slice(0, 200)
+      .map((node) => ({ node, kind: 'landmark', role: roleOf(node), name: accessibleName(node).name }));
+    return headings.concat(landmarks);
+  }
+
+  function describeOutline(items) {
+    return items.map((item) => (item.kind === 'heading' ? `h${item.level}:${item.text}` : `${item.role}:${item.name}`)).join('|');
+  }
+
+  function outlineWarnings(items) {
+    const headings = items.filter((item) => item.kind === 'heading');
+    const landmarks = items.filter((item) => item.kind === 'landmark');
+    const warnings = [];
+    const h1 = headings.filter((item) => item.level === 1).length;
+    if (!h1) warnings.push('No level-1 heading on the page.');
+    if (h1 > 1) warnings.push(`${h1} level-1 headings.`);
+    const skips = [];
+    headings.forEach((item, index) => {
+      const before = headings[index - 1];
+      if (before && item.level > before.level + 1) skips.push(`H${before.level} → H${item.level} skips a level (“${item.text || '(empty)'}”).`);
+    });
+    warnings.push(...skips.slice(0, 5));
+    if (skips.length > 5) warnings.push(`+${skips.length - 5} more skipped levels.`);
+    const empty = headings.filter((item) => !item.text).length;
+    if (empty) warnings.push(`${empty} empty heading${empty > 1 ? 's' : ''}.`);
+    const byRole = {};
+    landmarks.forEach((item) => { (byRole[item.role] ||= []).push(item); });
+    Object.entries(byRole).forEach(([role, list]) => {
+      if (role === 'main' && list.length > 1) warnings.push(`${list.length} main landmarks.`);
+      if (list.length > 1 && role !== 'region' && role !== 'form') {
+        const names = list.map((item) => item.name.toLowerCase());
+        if (names.some((name) => !name) || new Set(names).size < names.length) {
+          warnings.push(`${list.length} ${role} landmarks without unique names.`);
+        }
+      }
+    });
+    if (!byRole.main) warnings.push('No main landmark.');
+    return warnings;
+  }
+
+  function drawOutline(items, layer) {
+    items.forEach((item) => {
+      const rect = item.node.getBoundingClientRect();
+      if (!onScreen(rect) || (!rect.width && !rect.height)) return;
+      const frame = el('div', `outline__frame${item.kind === 'landmark' ? ' outline__frame--landmark' : ''}`);
+      place(frame, rect);
+      layer.append(frame);
+      const text = item.kind === 'heading' ? `H${item.level}` : item.role;
+      const x = Math.max(rect.left, 4);
+      const y = Math.max(rect.top - (item.kind === 'landmark' ? 0 : 22), 4);
+      badge(layer, text, item.kind === 'heading' ? x : Math.max(rect.right - 4, 60), y, item.kind, false)
+        .style.transform = item.kind === 'landmark' ? 'translateX(-100%)' : '';
+    });
+  }
+
+  function clippingAncestorX(node) {
+    for (let current = node.parentElement; current && current !== document.body && current !== document.documentElement; current = current.parentElement) {
+      if (getComputedStyle(current).overflowX !== 'visible') return current;
+    }
+    return null;
+  }
+
+  function overflowCause(node, cs) {
+    const causes = [];
+    if (cs.minWidth !== '0px' && cs.minWidth !== 'auto' && px(cs.minWidth) > 0) causes.push(`min-width ${cs.minWidth}`);
+    if (cs.whiteSpace === 'nowrap' || cs.whiteSpace === 'pre') causes.push(cs.whiteSpace);
+    if (px(cs.marginRight) < 0) causes.push(`margin-right ${cs.marginRight}`);
+    if (px(cs.marginLeft) < 0) causes.push(`margin-left ${cs.marginLeft}`);
+    if (cs.transform !== 'none') causes.push('transformed');
+    if (cs.position === 'absolute') causes.push('absolute');
+    return causes;
+  }
+
+  function scanOverflow() {
+    const viewport = document.documentElement.clientWidth;
+    const items = [];
+    const fixed = [];
+    let count = 0;
+    for (const node of document.body?.querySelectorAll('*') || []) {
+      if (++count > 5000) break;
+      if (fixed.some((parent) => parent.contains(node))) continue;
+      const cs = getComputedStyle(node);
+      if (cs.display === 'none' || cs.display === 'contents') continue;
+      if (cs.position === 'fixed') {
+        fixed.push(node);
+        continue;
+      }
+      const rect = node.getBoundingClientRect();
+      if (rect.width <= 1 || rect.height <= 1) continue;
+
+      const left = rect.left + scrollX;
+      const right = rect.right + scrollX;
+      if (right > viewport + 0.5 || left < -0.5) {
+        const parent = node.parentElement?.getBoundingClientRect();
+        const parentOver = parent && (parent.right + scrollX > viewport + 0.5 || parent.left + scrollX < -0.5);
+        if (!parentOver && !clippingAncestorX(node)) {
+          const amount = right > viewport + 0.5 ? `+${r1(right - viewport)}px →` : `← ${r1(-left)}px`;
+          const causes = overflowCause(node, cs);
+          items.push({ node, kind: 'overflow', label: [amount, ...causes].join(' · ') });
+        }
+      }
+
+      const clipX = /hidden|clip/.test(cs.overflowX) && node.scrollWidth > node.clientWidth + 1;
+      const clipY = /hidden|clip/.test(cs.overflowY) && node.scrollHeight > node.clientHeight + 1;
+      if (clipX || clipY) {
+        const parts = [];
+        if (clipX) parts.push(`clips ${node.scrollWidth - node.clientWidth}px wide`);
+        if (clipY) parts.push(`clips ${node.scrollHeight - node.clientHeight}px tall`);
+        if (cs.textOverflow === 'ellipsis') parts.push('ellipsis');
+        items.push({ node, kind: 'clips', label: parts.join(' · ') });
+      }
+      if (items.length >= 300) break;
+    }
+    return items;
+  }
+
+  function overflowSummary() {
+    const html = document.documentElement;
+    const extra = html.scrollWidth - html.clientWidth;
+    const clipped = [html, document.body].some((node) => node && /hidden|clip/.test(getComputedStyle(node).overflowX));
+    if (extra > 0) return `Page scrolls horizontally by ${extra}px.`;
+    return clipped ? 'No horizontal page scroll, but html/body clips overflow-x, so overflow may be hidden.' : 'No horizontal page scroll.';
+  }
+
+  function drawOverflow(items, layer) {
+    items.forEach((item) => {
+      const rect = item.node.getBoundingClientRect();
+      if (!onScreen(rect)) return;
+      const frame = el('div', `overflow__frame${item.kind === 'clips' ? ' overflow__frame--clips' : ''}`);
+      place(frame, rect);
+      layer.append(frame);
+      const short = item.label.split(' · ')[0];
+      badge(layer, short, Math.min(Math.max(rect.left, 4), innerWidth - 120), Math.max(rect.top, 4), item.kind, false);
+    });
+  }
+
+  const maps = {
+    focus: {
+      enabled: () => state.showFocusMap,
+      interval: 300,
+      scan: () => focusStops().map((node) => ({ node })),
+      describe: (items) => String(items.length),
+      draw: drawFocusMap
+    },
+    headings: {
+      enabled: () => state.showHeadings,
+      interval: 1000,
+      idle: true,
+      scan: scanOutline,
+      describe: describeOutline,
+      draw: drawOutline
+    },
+    overflow: {
+      enabled: () => state.showOverflow,
+      interval: 2000,
+      idle: true,
+      scan: scanOverflow,
+      describe: (items) => `${overflowSummary()}|${items.map((item) => `${item.kind}:${item.label}`).join('|')}`,
+      draw: drawOverflow
+    }
+  };
+
+  function applyScan(map, items) {
+    map.items = items;
+    const content = map.describe(items);
+    map.geometry = '';
+    if (content !== map.content) {
+      map.content = content;
+      invalidate();
+    }
+  }
+
+  function refreshMap(name, force) {
+    const map = maps[name];
+    const layer = layers[name];
+    if (!map.enabled()) {
+      if (map.items) {
+        map.items = null;
+        map.content = null;
+        map.geometry = '';
+        clear(layer);
+      }
       return;
     }
     const now = performance.now();
-    if (!force && now - focusChecked < 300) return;
-    focusChecked = now;
-    const stops = focusStops().map((node) => ({ node, rect: node.getBoundingClientRect() }));
-    const next = stops.map(({ rect }) => `${r1(rect.left)}:${r1(rect.top)}:${r1(rect.width)}:${r1(rect.height)}`).join('|') || '-';
-    if (!force && next === focusSignature) return;
-    focusSignature = next;
-    clear(layers.focus);
-    drawFocusMap(stops);
+    if (!map.pending && (!map.items || now - (map.scanned || 0) >= map.interval)) {
+      map.scanned = now;
+      if (map.idle) {
+        map.pending = true;
+        idle(() => {
+          map.pending = false;
+          if (state.active && map.enabled()) applyScan(map, map.scan());
+        });
+      } else applyScan(map, map.scan());
+    }
+    if (!map.items) return;
+    const geometry = map.items.map(({ node }) => {
+      const rect = node.getBoundingClientRect();
+      return `${r1(rect.left)}:${r1(rect.top)}:${r1(rect.width)}:${r1(rect.height)}`;
+    }).join('|') || '-';
+    if (!force && geometry === map.geometry) return;
+    map.geometry = geometry;
+    clear(layer);
+    map.draw(map.items, layer);
+  }
+
+  function refreshMaps(force) {
+    Object.keys(maps).forEach((name) => refreshMap(name, force));
   }
 
   function toggleFocusMap() {
     state.showFocusMap = !state.showFocusMap;
-    state.hovered = null;
-    state.locked = false;
     if (state.showFocusMap) {
       const stops = focusStops();
       const positive = stops.filter((node) => node.tabIndex > 0).length;
-      toast(`Focus map · ${stops.length} stops${positive ? ` · ${positive} with tabindex > 0` : ''}`);
+      const small = stops.filter((node) => isSmallTarget(node.getBoundingClientRect())).length;
+      const notes = [`Focus map · ${stops.length} stops`];
+      if (positive) notes.push(`${positive} with tabindex > 0`);
+      if (small) notes.push(`${small} under 24×24 (dotted)`);
+      toast(notes.join(' · '));
     } else toast('Focus map off');
-    invalidate();
   }
 
-  const NAME_FROM_CONTENT = /^(button|link|heading|checkbox|radio|tab|menuitem|option|switch|cell|columnheader|rowheader|tooltip|treeitem)$/;
-  const TAG_ROLES = { nav: 'navigation', main: 'main', header: 'banner', footer: 'contentinfo', aside: 'complementary', form: 'form', ul: 'list', ol: 'list', li: 'listitem', table: 'table', dialog: 'dialog', p: 'paragraph', textarea: 'textbox', button: 'button', summary: 'button', iframe: 'iframe' };
-  const INPUT_ROLES = { checkbox: 'checkbox', radio: 'radio', range: 'slider', number: 'spinbutton', search: 'searchbox', button: 'button', submit: 'button', reset: 'button', image: 'button' };
-
-  function textOf(node) {
-    const text = (node.innerText ?? node.textContent ?? '').replace(/\s+/g, ' ').trim();
-    if (text) return text;
-    return [...node.querySelectorAll('img[alt], [aria-label]')]
-      .map((child) => child.getAttribute('alt') ?? child.getAttribute('aria-label'))
-      .join(' ')
-      .trim();
-  }
-
-  function idrefText(value) {
-    return value.split(/\s+/).map((id) => document.getElementById(id)).filter(Boolean).map(textOf).join(' ').trim();
-  }
-
-  function implicitRole(node) {
-    const tag = node.tagName.toLowerCase();
-    if (tag === 'a' || tag === 'area') return node.hasAttribute('href') ? 'link' : 'generic';
-    if (/^h[1-6]$/.test(tag)) return 'heading';
-    if (tag === 'img') return node.getAttribute('alt') === '' ? 'presentation' : 'img';
-    if (tag === 'select') return node.multiple || node.size > 1 ? 'listbox' : 'combobox';
-    if (tag === 'section') return node.hasAttribute('aria-label') || node.hasAttribute('aria-labelledby') ? 'region' : 'generic';
-    if (tag === 'input') return node.list ? 'combobox' : INPUT_ROLES[node.type] || 'textbox';
-    return TAG_ROLES[tag] || 'generic';
-  }
-
-  function roleOf(node) {
-    const explicit = node.getAttribute('role')?.trim().split(/\s+/)[0];
-    return explicit ? { role: explicit, explicit: true } : { role: implicitRole(node), explicit: false };
-  }
-
-  function accessibleName(node, role) {
-    const labelledby = node.getAttribute('aria-labelledby');
-    if (labelledby) {
-      const text = idrefText(labelledby);
-      if (text) return [text, 'aria-labelledby'];
-    }
-    const label = node.getAttribute('aria-label')?.trim();
-    if (label) return [label, 'aria-label'];
-    if (node.labels?.length) {
-      const text = [...node.labels].map(textOf).join(' ').trim();
-      if (text) return [text, '<label>'];
-    }
-    if (/^(IMG|AREA)$/.test(node.tagName) || (node.tagName === 'INPUT' && node.type === 'image')) {
-      const alt = node.getAttribute('alt');
-      if (alt !== null) return [alt.trim(), 'alt'];
-    }
-    if (node.tagName === 'INPUT' && /^(submit|reset|button)$/.test(node.type) && node.value) return [node.value, 'value'];
-    if (NAME_FROM_CONTENT.test(role)) {
-      const text = textOf(node);
-      if (text) return [text, 'content'];
-    }
-    const title = node.getAttribute('title')?.trim();
-    if (title) return [title, 'title'];
-    const placeholder = node.getAttribute('placeholder')?.trim();
-    if (placeholder) return [placeholder, 'placeholder'];
-    return ['', ''];
-  }
-
-  const FIELD_ROLES = /^(textbox|searchbox|combobox|listbox|slider|spinbutton|checkbox|radio|switch)$/;
-  const LANDMARK_ROLES = /^(navigation|main|banner|contentinfo|complementary|region|form|search)$/;
-  const VAGUE_LINK = /^(click here|here|read more|more|learn more|details|link|εδώ|περισσότερα|δείτε περισσότερα|μάθετε περισσότερα)$/i;
-  const FILE_NAME = /\.(jpe?g|png|gif|webp|avif|svg)$/i;
-
-  function kindOf(node, role) {
-    if (node.tagName === 'IFRAME') return 'frame';
-    if (role === 'img' || role === 'presentation' || role === 'none' || /^(IMG|svg)$/.test(node.tagName)) return 'image';
-    if (role === 'link') return 'link';
-    if (role === 'button') return 'button';
-    if (FIELD_ROLES.test(role)) return 'field';
-    if (role === 'heading') return 'heading';
-    if (LANDMARK_ROLES.test(role)) return 'landmark';
-    return 'other';
-  }
-
-  function headingLevel(node) {
-    return Number(/^H([1-6])$/.exec(node.tagName)?.[1] || node.getAttribute('aria-level') || 2);
-  }
-
-  function previousHeadingLevel(node) {
-    const headings = [...document.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]')];
-    const previous = headings[headings.indexOf(node) - 1];
-    return previous ? headingLevel(previous) : 0;
-  }
-
-  function nameFact(add, name, source, required) {
-    if (!name) {
-      add('name', required ? 'missing (4.1.2)' : 'none', required);
-      return;
-    }
-    add('name', `"${name}" · ${source}`);
-  }
-
-  function labelInName(add, node) {
-    const visible = textOf(node).toLowerCase();
-    const ariaLabel = node.getAttribute('aria-label')?.trim().toLowerCase();
-    if (ariaLabel && visible && !ariaLabel.includes(visible)) add('label in name', 'aria-label does not contain the visible text (2.5.3)', true);
-  }
-
-  function targetSize(add, node) {
-    const rect = node.getBoundingClientRect();
-    const fits = rect.width >= 24 && rect.height >= 24;
-    add('target', `${r1(rect.width)} × ${r1(rect.height)}${fits ? '' : ' · under 24px, check spacing (2.5.8)'}`, !fits);
-  }
-
-  function stateFact(add, node, names) {
-    const states = names.filter((name) => node.hasAttribute(name)).map((name) => `${name}="${node.getAttribute(name)}"`);
-    if (states.length) add('state', states.join(' · '));
-  }
-
-  function linkFacts(add, node, name, source) {
-    nameFact(add, name, source, true);
-    if (name && VAGUE_LINK.test(name)) add('purpose', 'vague out of context (2.4.4)', true);
-    const href = node.getAttribute('href') || '';
-    if (href === '#' || /^javascript:/i.test(href)) add('href', `"${href}" · an action, should be a <button>`, true);
-    if (node.target === '_blank' && !/new (tab|window)|νέα καρτέλα|νέο παράθυρο/i.test(name)) add('opens', 'new tab, not announced in the name', true);
-    stateFact(add, node, ['aria-current']);
-    labelInName(add, node);
-    targetSize(add, node);
-  }
-
-  function buttonFacts(add, node, name, source) {
-    nameFact(add, name, source, true);
-    if (!/^(BUTTON|SUMMARY|INPUT)$/.test(node.tagName)) add('element', `<${node.tagName.toLowerCase()}> as button · needs Enter + Space`, true);
-    stateFact(add, node, ['aria-expanded', 'aria-pressed', 'aria-controls', 'aria-haspopup', 'disabled', 'aria-disabled']);
-    labelInName(add, node);
-    targetSize(add, node);
-  }
-
-  function fieldFacts(add, node, role, name, source) {
-    if (!name) add('label', 'missing (3.3.2 / 4.1.2)', true);
-    else if (source === 'placeholder' || source === 'title') add('label', `"${name}" · ${source} only, add a visible <label>`, true);
-    else add('label', `"${name}" · ${source}`);
-    if (node.type === 'checkbox' || node.type === 'radio') add('state', node.checked ? 'checked' : 'unchecked');
-    stateFact(add, node, ['required', 'aria-required', 'aria-invalid', 'aria-expanded', 'autocomplete', 'disabled']);
-    const describedby = node.getAttribute('aria-describedby');
-    if (describedby) {
-      const text = idrefText(describedby);
-      add('description', text || `aria-describedby="${describedby}" points to nothing`, !text);
-    }
-    if (node.getAttribute('aria-invalid') === 'true' && !describedby) add('error', 'invalid but no aria-describedby message (3.3.1)', true);
-    if (/^(checkbox|radio|switch|slider)$/.test(role)) targetSize(add, node);
-  }
-
-  function imageFacts(add, node, role, name, source) {
-    if (node.tagName === 'svg') {
-      if (node.closest('[aria-hidden="true"]')) add('alt', 'decorative · aria-hidden');
-      else if (name) add('alt', `"${name}" · ${source}`);
-      else if (node.querySelector('title')?.textContent.trim()) add('alt', `"${node.querySelector('title').textContent.trim()}" · <title>`);
-      else add('alt', 'no name and not aria-hidden (1.1.1)', true);
-      return;
-    }
-    const alt = node.getAttribute('alt');
-    if (role === 'presentation' || role === 'none' || alt === '') add('alt', 'decorative · empty alt');
-    else if (alt === null && !name) add('alt', 'missing (1.1.1)', true);
-    else if (FILE_NAME.test(name)) add('alt', `"${name}" · a file name, not a description`, true);
-    else add('alt', `"${name}" · ${source}`);
-  }
-
-  function headingFacts(add, node, name) {
-    const level = headingLevel(node);
-    const previous = previousHeadingLevel(node);
-    add('level', previous && level > previous + 1 ? `h${level} · skips from h${previous} (1.3.1)` : `h${level}`, Boolean(previous && level > previous + 1));
-    add('text', name ? `"${name}"` : 'empty heading', !name);
-  }
-
-  function frameFacts(add, node) {
-    const title = node.getAttribute('title')?.trim() || node.getAttribute('aria-label')?.trim();
-    add('title', title ? `"${title}"` : 'missing (4.1.2)', !title);
-  }
-
-  function landmarkFacts(add, node, role, name) {
-    const siblings = [...document.querySelectorAll(role === 'navigation' ? 'nav, [role="navigation"]' : `[role="${role}"]`)].length;
-    if (name) add('name', `"${name}"`);
-    else if (role === 'region') add('name', 'missing, a section is only a region when named', true);
-    else if (siblings > 1) add('name', `none · ${siblings} ${role} landmarks, name them apart`, true);
-  }
-
-  function a11yFacts(node) {
-    const facts = [];
-    const add = (key, value, issue = false) => facts.push([key, value, issue]);
-    const { role, explicit } = roleOf(node);
-    const [name, source] = accessibleName(node, role);
-    const stops = focusStops();
-    const position = stops.indexOf(node);
-    const kind = kindOf(node, role);
-
-    add('role', `${role}${explicit ? ' · role attr' : ''}`);
-    if (position >= 0) add('tab stop', `${position + 1} of ${stops.length}${node.tabIndex > 0 ? ` · tabindex ${node.tabIndex} breaks the order` : ''}`, node.tabIndex > 0);
-
-    if (kind === 'link') linkFacts(add, node, name, source);
-    else if (kind === 'button') buttonFacts(add, node, name, source);
-    else if (kind === 'field') fieldFacts(add, node, role, name, source);
-    else if (kind === 'image') imageFacts(add, node, role, name, source);
-    else if (kind === 'heading') headingFacts(add, node, name);
-    else if (kind === 'frame') frameFacts(add, node);
-    else if (kind === 'landmark') landmarkFacts(add, node, role, name);
-    else if (position >= 0 && role === 'generic') add('role', 'focusable but no role (4.1.2)', true);
-    else if (name) add('name', `"${name}" · ${source}`);
-
-    if (position >= 0 && node.closest('[aria-hidden="true"]')) add('hidden', 'focusable inside aria-hidden (4.1.2)', true);
-
-    const contrast = contrastFacts(node).find(([key]) => key === 'contrast');
-    if (contrast) add('contrast', contrast[1], contrast[1].includes('AA fail'));
-
-    return facts;
-  }
-
-  function selectInMap(target) {
-    if (!target) return;
-    state.hovered = target.closest(FOCUSABLE) || target;
-    state.locked = true;
-    invalidate();
-  }
+  /* ---------- measurement ---------- */
 
   function metrics(node) {
     const rect = node.getBoundingClientRect();
@@ -945,26 +1133,16 @@
     return node?.classList ? [...node.classList] : [];
   }
 
-  function classButtons(node) {
-    const names = classNames(node);
-    if (!names.length) return null;
-    const list = el('ul', 'classes');
-    list.setAttribute('aria-label', 'Classes');
-    names.forEach((name) => {
-      const item = el('li');
-      item.append(button('classes__copy', 'copy-class', `.${name}`, { value: `.${name}`, ariaLabel: `Copy class .${name}` }));
-      list.append(item);
-    });
-    return list;
+  function rootFontSize() {
+    return px(getComputedStyle(document.documentElement).fontSize) || 16;
   }
 
-  function place(node, box) {
-    Object.assign(node.style, {
-      left: `${box.left}px`,
-      top: `${box.top}px`,
-      width: `${Math.max(box.width, 0)}px`,
-      height: `${Math.max(box.height, 0)}px`
-    });
+  const remOf = (value) => String(Math.round((value / rootFontSize()) * 1000) / 1000);
+
+  function offScale(value) {
+    if (!state.showSpacing || Math.abs(value) < 0.05) return false;
+    const steps = value / state.spacingBase;
+    return Math.abs(steps - Math.round(steps)) > 0.02;
   }
 
   function drawBoxModel(node) {
@@ -1016,7 +1194,8 @@
       [padding.right, rect.right - padding.right / 2, rect.top + rect.height / 2, 'p']
     ].forEach(([value, x, y, kind]) => {
       if (value < 4) return;
-      chip(`${kind}${r1(value)}`, x, y, '', { transform: 'translate(-50%, -50%)' });
+      const warn = offScale(value);
+      chip(`${kind}${r1(value)}${warn ? ' !' : ''}`, x, y, warn ? 'warn' : '', { transform: 'translate(-50%, -50%)' });
     });
   }
 
@@ -1033,12 +1212,13 @@
       lines.push(`gap: ${r1(px(cs.rowGap))} / ${r1(px(cs.columnGap))}`);
       lines.push(`justify: ${cs.justifyContent} · align: ${cs.alignItems}`);
     }
-    lines.push(`font: ${cs.fontSize}/${cs.lineHeight} ${cs.fontWeight}`);
+    const rem = state.showSpacing ? ` (${remOf(px(cs.fontSize))}rem)` : '';
+    lines.push(`font: ${cs.fontSize}${rem}/${cs.lineHeight} ${cs.fontWeight}`);
     lines.push(`color: ${hexOf(cs.color)}`);
     return lines;
   }
 
-  function drawTip(node) {
+  function drawTip(node, info) {
     const { rect, cs } = metrics(node);
     const tip = el('div', 'tip');
 
@@ -1048,33 +1228,19 @@
     size.textContent = `${r1(rect.width)} × ${r1(rect.height)}`;
     tip.append(name, size);
 
-    layoutSummary(cs).forEach((line) => {
+    const lines = layoutSummary(cs);
+    if (info) lines.push(`${info.role}${info.name ? ` “${info.name.slice(0, 60)}”` : ' · no name'}`);
+    lines.forEach((line) => {
       const row = el('span', 'tip__row');
       row.textContent = line;
       tip.append(row);
     });
+    if (isFrame(node)) {
+      const hint = el('span', 'tip__hint');
+      hint.textContent = 'iframe · Enter to inspect inside';
+      tip.append(hint);
+    }
 
-    showTip(tip, node);
-  }
-
-  function drawFocusTip(node) {
-    const tip = el('div', 'tip tip--focus');
-    const name = el('span', 'tip__name');
-    name.textContent = describe(node);
-    tip.append(name);
-
-    a11yFacts(node).forEach(([key, value, issue]) => {
-      const row = el('span', issue ? 'tip__row tip__row--issue' : 'tip__row');
-      const term = el('span', 'tip__key');
-      term.textContent = `${issue ? '⚠ ' : ''}${key} `;
-      row.append(term, value);
-      tip.append(row);
-    });
-
-    showTip(tip, node);
-  }
-
-  function showTip(tip, node) {
     layers.labels.append(tip);
     const { width, height } = tip.getBoundingClientRect();
     const { left, top } = tipPosition(node, width, height);
@@ -1128,51 +1294,92 @@
     return candidates.reduce((best, candidate) => (score(candidate) < score(best) ? candidate : best));
   }
 
+  /* ---------- grid & flex overlays ---------- */
+
   function tracks(value) {
     if (!value || value === 'none') return [];
     return value.split(' ').map(parseFloat).filter((n) => !Number.isNaN(n));
   }
 
-  function addTrack(box, modifier, label) {
+  function addTrack(box, modifier, label, warn) {
     const node = el('div', `track${modifier ? ` track--${modifier}` : ''}`);
     place(node, box);
     layers.layout.append(node);
     if (label) {
-      chip(label, box.left + box.width / 2, box.top + box.height / 2, 'track', { transform: 'translate(-50%, -50%)' });
+      chip(warn ? `${label} !` : label, box.left + box.width / 2, box.top + box.height / 2, warn ? 'warn' : 'track', { transform: 'translate(-50%, -50%)' });
     }
+  }
+
+  function contentMode(value, rtl) {
+    const mode = value.replace(/^(safe|unsafe)\s+/, '');
+    if (mode === 'left') return rtl ? 'end' : 'start';
+    if (mode === 'right') return rtl ? 'start' : 'end';
+    return mode;
+  }
+
+  function distribute(free, count, mode) {
+    if (free <= 0.5 || !count) return { offset: 0, extra: 0 };
+    if (mode === 'center') return { offset: free / 2, extra: 0 };
+    if (mode === 'end' || mode === 'flex-end') return { offset: free, extra: 0 };
+    if (mode === 'space-between') return { offset: 0, extra: count > 1 ? free / (count - 1) : 0 };
+    if (mode === 'space-around') return { offset: free / count / 2, extra: free / count };
+    if (mode === 'space-evenly') return { offset: free / (count + 1), extra: free / (count + 1) };
+    return { offset: 0, extra: 0 };
   }
 
   function drawGrid(node, cs) {
     const { rect, border, padding } = metrics(node);
+    const scaleX = node.offsetWidth ? rect.width / node.offsetWidth : 1;
+    const scaleY = node.offsetHeight ? rect.height / node.offsetHeight : 1;
+    const originX = rect.left + (border.left + padding.left) * scaleX;
+    const originY = rect.top + (border.top + padding.top) * scaleY;
+
+    const subgrid = [cs.gridTemplateColumns, cs.gridTemplateRows].some((value) => value.startsWith('subgrid'));
+    if (subgrid) chip('subgrid', originX, originY, 'track', { transform: 'translateY(-100%)' });
+
     const cols = tracks(cs.gridTemplateColumns);
     const rows = tracks(cs.gridTemplateRows);
     if (!cols.length && !rows.length) return;
 
+    const rtl = cs.direction === 'rtl';
     const columnGap = px(cs.columnGap);
     const rowGap = px(cs.rowGap);
-    const originX = rect.left + border.left + padding.left;
-    const originY = rect.top + border.top + padding.top;
-    const gridWidth = cols.reduce((sum, n) => sum + n, 0) + Math.max(cols.length - 1, 0) * columnGap;
-    const gridHeight = rows.reduce((sum, n) => sum + n, 0) + Math.max(rows.length - 1, 0) * rowGap;
+    const contentWidth = node.clientWidth - padding.left - padding.right;
+    const contentHeight = node.clientHeight - padding.top - padding.bottom;
+    const usedWidth = cols.reduce((sum, n) => sum + n, 0) + Math.max(cols.length - 1, 0) * columnGap;
+    const usedHeight = rows.reduce((sum, n) => sum + n, 0) + Math.max(rows.length - 1, 0) * rowGap;
+    const inline = distribute(contentWidth - usedWidth, cols.length, contentMode(cs.justifyContent, rtl));
+    const block = distribute(contentHeight - usedHeight, rows.length, contentMode(cs.alignContent, false));
+    const colStep = columnGap + inline.extra;
+    const rowStep = rowGap + block.extra;
+    const gridWidth = (usedWidth + inline.extra * Math.max(cols.length - 1, 0)) * scaleX;
+    const gridHeight = (usedHeight + block.extra * Math.max(rows.length - 1, 0)) * scaleY;
+    const startX = rtl
+      ? originX + (contentWidth - inline.offset - node.scrollLeft) * scaleX - gridWidth
+      : originX + (inline.offset - node.scrollLeft) * scaleX;
+    const startY = originY + (block.offset - node.scrollTop) * scaleY;
+    const gapWarn = offScale(columnGap);
+    const rowWarn = offScale(rowGap);
 
-    let x = originX;
-    cols.forEach((width, index) => {
-      addTrack({ left: x, top: originY, width, height: gridHeight }, '', `${r1(width)}`);
-      x += width;
-      if (index < cols.length - 1 && columnGap > 0) {
-        addTrack({ left: x, top: originY, width: columnGap, height: gridHeight }, 'gap', columnGap >= 16 ? `${r1(columnGap)}` : '');
-        x += columnGap;
+    const ordered = rtl ? cols.slice().reverse() : cols;
+    let x = startX;
+    ordered.forEach((width, index) => {
+      addTrack({ left: x, top: startY, width: width * scaleX, height: gridHeight }, '', `${r1(width)}`);
+      x += width * scaleX;
+      if (index < ordered.length - 1 && colStep > 0) {
+        addTrack({ left: x, top: startY, width: colStep * scaleX, height: gridHeight }, 'gap', colStep >= 16 ? `${r1(colStep)}` : '', gapWarn && !inline.extra);
+        x += colStep * scaleX;
       }
     });
 
-    let y = originY;
+    let y = startY;
     rows.forEach((height, index) => {
-      addTrack({ left: originX, top: y, width: gridWidth, height }, '', '');
-      chip(`${r1(height)}`, originX - 4, y + height / 2, 'track', { transform: 'translate(-100%, -50%)' });
-      y += height;
-      if (index < rows.length - 1 && rowGap > 0) {
-        addTrack({ left: originX, top: y, width: gridWidth, height: rowGap }, 'gap', rowGap >= 16 ? `${r1(rowGap)}` : '');
-        y += rowGap;
+      addTrack({ left: startX, top: y, width: gridWidth, height: height * scaleY }, '', '');
+      chip(`${r1(height)}`, startX - 4, y + (height * scaleY) / 2, 'track', { transform: 'translate(-100%, -50%)' });
+      y += height * scaleY;
+      if (index < rows.length - 1 && rowStep > 0) {
+        addTrack({ left: startX, top: y, width: gridWidth, height: rowStep * scaleY }, 'gap', rowStep >= 16 ? `${r1(rowStep)}` : '', rowWarn && !block.extra);
+        y += rowStep * scaleY;
       }
     });
   }
@@ -1184,7 +1391,9 @@
     rects.forEach((rect) => addTrack(rect, 'item', ''));
 
     const horizontal = cs.flexDirection.startsWith('row');
+    const cssGap = px(horizontal ? cs.columnGap : cs.rowGap);
     const sorted = rects.slice().sort((a, b) => (horizontal ? a.left - b.left : a.top - b.top));
+    const warn = (gap) => offScale(cssGap) && Math.abs(gap - cssGap) < 0.5;
 
     for (let index = 1; index < sorted.length; index += 1) {
       const previous = sorted[index - 1];
@@ -1198,7 +1407,7 @@
           top,
           width: gap,
           height: Math.max(Math.min(previous.bottom, current.bottom) - top, 2)
-        }, 'gap', `${r1(gap)}`);
+        }, 'gap', `${r1(gap)}`, warn(gap));
       } else {
         const gap = current.top - previous.bottom;
         if (gap < 0.5) continue;
@@ -1208,7 +1417,7 @@
           top: previous.bottom,
           width: Math.max(Math.min(previous.right, current.right) - left, 2),
           height: gap
-        }, 'gap', `${r1(gap)}`);
+        }, 'gap', `${r1(gap)}`, warn(gap));
       }
     }
   }
@@ -1218,6 +1427,171 @@
     if (cs.display.includes('grid')) drawGrid(node, cs);
     else if (cs.display.includes('flex')) drawFlex(node, cs);
   }
+
+  /* ---------- layout grid & breakpoint ---------- */
+
+  function activePreset() {
+    const sorted = state.presets.slice().sort((a, b) => b.minWidth - a.minWidth);
+    return sorted.find((preset) => preset.minWidth <= innerWidth) || sorted[sorted.length - 1];
+  }
+
+  function drawLayoutGrid() {
+    if (!state.showGrid) return;
+    const preset = activePreset();
+    if (!preset) return;
+    const width = document.documentElement.clientWidth;
+    const columns = Math.max(1, Math.round(preset.columns) || 1);
+    const gutter = Math.max(0, preset.gutter || 0);
+    const available = Math.max(0, width - 2 * Math.max(0, preset.margin || 0));
+    const container = preset.maxWidth ? Math.min(available, preset.maxWidth) : available;
+    const left = (width - container) / 2;
+    const column = Math.max(0, (container - gutter * (columns - 1)) / columns);
+    for (let index = 0; index < columns; index += 1) {
+      const node = el('div', 'gridcol', { left: `${left + index * (column + gutter)}px`, width: `${column}px` });
+      layers.grid.append(node);
+    }
+    const label = chip(`${innerWidth} × ${innerHeight} · ${preset.name} ≥${preset.minWidth} · ${columns} cols · col ${r1(column)}`, width / 2, 8, 'viewport', { transform: 'translateX(-50%)' });
+    layers.grid.append(label);
+  }
+
+  function drawGridRuler() {
+    if (state.showGridRuler) layers.grid.append(el('div', 'gridruler'));
+  }
+
+  function setGridField(field, value) {
+    const preset = activePreset();
+    if (!preset) return;
+    if (field === 'maxWidth') preset.maxWidth = value > 0 ? value : null;
+    else if (field === 'columns') preset.columns = Math.max(1, Math.round(value || 1));
+    else if (['gutter', 'margin', 'minWidth'].includes(field)) preset[field] = Math.max(0, value || 0);
+    savePresets();
+  }
+
+  /* ---------- design image ---------- */
+
+  const designKey = () => `${location.origin}${location.pathname}`;
+
+  function dataUrlToBlob(dataUrl) {
+    const [header, body] = dataUrl.split(',');
+    const type = header.match(/data:([^;]+)/)?.[1] || 'image/png';
+    const binary = atob(body);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return new Blob([bytes], { type });
+  }
+
+  async function loadDesign() {
+    const settingsKey = `design:${designKey()}`;
+    const imageKey = `design-image:${designKey()}`;
+    try {
+      const stored = await chrome.storage.local.get([settingsKey, imageKey]);
+      Object.assign(state.design, stored[settingsKey] || {});
+      designImage?.close?.();
+      designImage = stored[imageKey] ? await createImageBitmap(dataUrlToBlob(stored[imageKey])) : null;
+    } catch (error) {
+      designImage = null;
+      toast('Could not load the design image');
+    }
+    state.design.has = Boolean(designImage);
+    paintDesign();
+    invalidate();
+  }
+
+  function saveDesignSettings() {
+    const { has, ...settings } = state.design;
+    chrome.storage.local.set({ [`design:${designKey()}`]: settings }).catch(() => {});
+  }
+
+  function readAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function useDesignFile(file) {
+    if (!file?.type?.startsWith('image/')) {
+      toast('Choose a PNG, JPG or WebP image');
+      return;
+    }
+    try {
+      await chrome.storage.local.set({ [`design-image:${designKey()}`]: await readAsDataUrl(file) });
+      saveDesignSettings();
+      await loadDesign();
+      toast('Design image saved for this page');
+    } catch (error) {
+      toast('Could not save the design image');
+    }
+  }
+
+  async function removeDesign() {
+    await chrome.storage.local.remove([`design-image:${designKey()}`, `design:${designKey()}`]).catch(() => {});
+    designImage?.close?.();
+    designImage = null;
+    state.design = { has: false, opacity: 50, x: 0, y: 0, scale: '1', scroll: true, blend: false };
+    paintDesign();
+    invalidate();
+    toast('Design image removed');
+  }
+
+  function paintDesign() {
+    if (!designCanvas) return;
+    if (!designImage) {
+      designCanvas.width = 0;
+      designCanvas.height = 0;
+    } else if (designCanvas.source !== designImage) {
+      const { width, height } = designImage;
+      const factor = Math.min(1, 16384 / width, 16384 / height, Math.sqrt(100e6 / (width * height)));
+      designCanvas.width = Math.round(width * factor);
+      designCanvas.height = Math.round(height * factor);
+      designCanvas.getContext('2d').drawImage(designImage, 0, 0, designCanvas.width, designCanvas.height);
+      if (factor < 1) toast('Large design image shown at reduced resolution');
+    }
+    designCanvas.source = designImage;
+    placeDesign();
+  }
+
+  function setBlend(on) {
+    designHost.style.mixBlendMode = on ? 'difference' : '';
+    const html = document.documentElement;
+    if (on && rootBackground === null) {
+      const transparent = (node) => !node || rgba(getComputedStyle(node).backgroundColor)[3] === 0;
+      if (transparent(html) && transparent(document.body)) {
+        rootBackground = html.style.backgroundColor;
+        html.style.backgroundColor = 'Canvas';
+      }
+    } else if (!on && rootBackground !== null) {
+      html.style.backgroundColor = rootBackground;
+      rootBackground = null;
+    }
+  }
+
+  function placeDesign() {
+    if (!designCanvas) return;
+    const visible = state.active && state.showDesign && Boolean(designImage);
+    designCanvas.hidden = !visible;
+    setBlend(visible && state.design.blend);
+    if (!visible) return;
+    const { opacity, x, y, scale, scroll } = state.design;
+    const width = scale === 'fit' ? document.documentElement.clientWidth : designImage.width / (scale === '2' ? 2 : 1);
+    Object.assign(designCanvas.style, {
+      width: `${width}px`,
+      opacity: String(Math.min(100, Math.max(0, opacity)) / 100),
+      transform: `translate(${x - (scroll ? scrollX : 0)}px, ${y - (scroll ? scrollY : 0)}px)`
+    });
+  }
+
+  function setDesignField(field, value) {
+    if (field === 'opacity') state.design.opacity = Math.min(100, Math.max(0, value ?? 50));
+    else if (field === 'x' || field === 'y') state.design[field] = value || 0;
+    else if (field === 'scale') state.design.scale = ['1', '2', 'fit'].includes(String(value)) ? String(value) : '1';
+    placeDesign();
+    saveDesignSettings();
+  }
+
+  /* ---------- distances & pins ---------- */
 
   function addRule(axis, from, to, cross, color) {
     const length = Math.abs(to - from);
@@ -1284,6 +1658,8 @@
     });
   }
 
+  /* ---------- colour & contrast ---------- */
+
   const swatch = document.createElement('canvas');
   swatch.width = 1;
   swatch.height = 1;
@@ -1303,18 +1679,59 @@
     return [0, 1, 2].map((i) => top[i] * alpha + under[i] * (1 - alpha)).concat(1);
   }
 
+  function textPoint(node) {
+    const range = document.createRange();
+    for (const child of node.childNodes) {
+      if (child.nodeType !== 3 || !child.nodeValue.trim()) continue;
+      range.selectNodeContents(child);
+      const rect = [...range.getClientRects()].find((box) => box.width > 0 && box.height > 0);
+      if (rect) return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    }
+    const rect = node.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  }
+
+  function paintStack(node) {
+    const { x, y } = textPoint(node);
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return null;
+    const stack = document.elementsFromPoint(x, y).filter((item) => item !== host && item !== designHost);
+    const index = stack.indexOf(node);
+    return index === -1 ? null : stack.slice(index);
+  }
+
+  function ancestors(node) {
+    const list = [];
+    for (let current = node; current; current = current.parentElement) list.push(current);
+    return list;
+  }
+
+  function pageBase() {
+    const scheme = getComputedStyle(document.documentElement).colorScheme || '';
+    return /dark/.test(scheme) && !/light/.test(scheme) ? [18, 18, 18, 1] : [255, 255, 255, 1];
+  }
+
   function backdrop(node) {
+    const stack = paintStack(node);
     const found = [];
     let image = false;
-    for (let current = node; current; current = current.parentElement) {
+    for (const current of stack || ancestors(node)) {
       const cs = getComputedStyle(current);
       if (cs.backgroundImage !== 'none') image = true;
       const color = rgba(cs.backgroundColor);
       if (color[3] > 0) found.push(color);
       if (color[3] === 1) break;
     }
-    const color = found.reduceRight((under, layer) => over(layer, under), [255, 255, 255, 1]);
-    return { color, image };
+    const color = found.reduceRight((under, layer) => over(layer, under), pageBase());
+    return { color, image, sampled: stack ? 'paint stack' : 'ancestors' };
+  }
+
+  function groupOpacity(node) {
+    let opacity = 1;
+    for (let current = node; current; current = current.parentElement) {
+      const value = parseFloat(getComputedStyle(current).opacity);
+      if (!Number.isNaN(value)) opacity *= value;
+    }
+    return opacity;
   }
 
   function channel(value) {
@@ -1336,6 +1753,13 @@
     return `#${color.slice(0, 3).map((value) => Math.round(value).toString(16).padStart(2, '0')).join('')}`;
   }
 
+  function pseudoBackground(node) {
+    return ['::before', '::after'].some((which) => {
+      const cs = getComputedStyle(node, which);
+      return cs.content !== 'none' && cs.content !== 'normal' && (rgba(cs.backgroundColor)[3] > 0 || cs.backgroundImage !== 'none');
+    });
+  }
+
   function contrastFacts(node) {
     const isControl = /^(INPUT|BUTTON|TEXTAREA|SELECT)$/.test(node.tagName);
     const hasText = [...node.childNodes].some((child) => child.nodeType === 3 && child.nodeValue.trim());
@@ -1343,7 +1767,9 @@
 
     const cs = getComputedStyle(node);
     const { color: background, image } = backdrop(node);
-    const ink = over(rgba(cs.color), background);
+    const text = rgba(cs.color);
+    text[3] *= groupOpacity(node);
+    const ink = over(text, background);
     const [light, dark] = [luminance(ink), luminance(background)].sort((a, b) => b - a);
     const ratio = (light + 0.05) / (dark + 0.05);
     const size = px(cs.fontSize);
@@ -1356,27 +1782,36 @@
     ];
     if (large) notes.push('large text');
     if (image) notes.push('over an image, verify');
+    if (pseudoBackground(node)) notes.push('::before/::after background not sampled');
 
     return [['text', toHex(ink)], ['background', toHex(background)], ['contrast', notes.join(' · ')]];
   }
 
-  let positionedAll = { time: 0, list: [] };
+  /* ---------- absolute / fixed elements ---------- */
+
+  const positioned = { list: [], time: -Infinity, pending: false };
 
   function allPositioned() {
-    const now = performance.now();
-    if (now - positionedAll.time > 1000) {
-      const list = [...document.querySelectorAll('*')]
-        .filter((node) => /^(absolute|fixed)$/.test(getComputedStyle(node).position))
-        .slice(0, 500);
-      positionedAll = { time: now, list };
+    if (!positioned.pending && performance.now() - positioned.time > 1000) {
+      positioned.pending = true;
+      idle(() => {
+        const list = [...document.querySelectorAll('*')]
+          .filter((node) => node !== host && node !== designHost && /^(absolute|fixed)$/.test(getComputedStyle(node).position))
+          .slice(0, 500);
+        const changed = list.length !== positioned.list.length || list.some((node, index) => node !== positioned.list[index]);
+        positioned.list = list;
+        positioned.time = performance.now();
+        positioned.pending = false;
+        if (changed && state.active) invalidate();
+      });
     }
-    return positionedAll.list;
+    return positioned.list;
   }
 
   function positionedWithin(node) {
     const area = node.getBoundingClientRect();
     return allPositioned()
-      .filter((child) => child !== node && child !== host && child.isConnected && !child.contains(node))
+      .filter((child) => child !== node && child.isConnected && !child.contains(node))
       .filter((child) => node.contains(child) || overlap(area, child.getBoundingClientRect()) > 0)
       .slice(0, 40);
   }
@@ -1413,27 +1848,60 @@
     return [['absolute / fixed', shown.join(', ')]];
   }
 
+  /* ---------- facts, copy, report ---------- */
+
+  function sides(box) {
+    return [box.top, box.right, box.bottom, box.left];
+  }
+
+  function sideText(values) {
+    const text = values.map(r1).join(' ');
+    return state.showSpacing ? `${text} (${values.map(remOf).join(' ')}rem)` : text;
+  }
+
+  function offScaleFact(margin, padding, cs) {
+    if (!state.showSpacing) return [];
+    const found = [];
+    ['top', 'right', 'bottom', 'left'].forEach((side) => {
+      if (offScale(margin[side])) found.push(`margin-${side} ${r1(margin[side])}`);
+      if (offScale(padding[side])) found.push(`padding-${side} ${r1(padding[side])}`);
+    });
+    if (/grid|flex/.test(cs.display)) {
+      if (offScale(px(cs.rowGap))) found.push(`row-gap ${r1(px(cs.rowGap))}`);
+      if (offScale(px(cs.columnGap))) found.push(`column-gap ${r1(px(cs.columnGap))}`);
+    }
+    return [['off-scale', found.length ? `! ${found.join(', ')}` : `none (base ${state.spacingBase}px)`]];
+  }
+
   function factsFor(node) {
     const { rect, cs, margin, padding, border } = metrics(node);
+    const size = `${r1(rect.width)} × ${r1(rect.height)}`;
+    const rem = state.showSpacing ? ` (${remOf(rect.width)} × ${remOf(rect.height)}rem)` : '';
+    const font = state.showSpacing ? `${cs.fontSize} (${remOf(px(cs.fontSize))}rem) / ${cs.lineHeight}` : `${cs.fontSize} / ${cs.lineHeight}`;
     return [
-      ['size', `${r1(rect.width)} × ${r1(rect.height)}`],
+      ['size', `${size}${rem}`],
       ['offset', `${r1(rect.left)}, ${r1(rect.top)}`],
-      ['margin', `${r1(margin.top)} ${r1(margin.right)} ${r1(margin.bottom)} ${r1(margin.left)}`],
-      ['border', `${r1(border.top)} ${r1(border.right)} ${r1(border.bottom)} ${r1(border.left)}`],
-      ['padding', `${r1(padding.top)} ${r1(padding.right)} ${r1(padding.bottom)} ${r1(padding.left)}`],
+      ['margin', sideText(sides(margin))],
+      ['border', sides(border).map(r1).join(' ')],
+      ['padding', sideText(sides(padding))],
       ['display', cs.display],
       ['gap', `${r1(px(cs.rowGap))} / ${r1(px(cs.columnGap))}`],
-      ['font', `${cs.fontSize} / ${cs.lineHeight}`],
+      ['font', font],
+      ...offScaleFact(margin, padding, cs),
       ...positionedFact(node),
-      ...(state.showFocusMap ? a11yFacts(node) : []),
-      ...(state.showContrast && !state.showFocusMap ? contrastFacts(node) : [])
+      ...(state.showContrast ? contrastFacts(node) : [])
     ];
   }
 
   function measurementText(node) {
     if (!node || !node.isConnected) return '';
     const lines = [describe(node)];
-    factsFor(node).forEach(([key, value]) => {
+    const entries = factsFor(node);
+    if (state.showA11y) {
+      const info = accessibility(node);
+      entries.push(...info.facts, ...info.flags.map((flag) => ['issue', flag]));
+    }
+    entries.forEach(([key, value]) => {
       lines.push(`${key.padEnd(8, ' ')}${value}`);
     });
     const cs = getComputedStyle(node);
@@ -1487,6 +1955,14 @@
       blocks.push([`RULER ${measure.index}`, ...lines].join('\n'));
     });
 
+    if (maps.overflow.items?.length) {
+      blocks.push(['OVERFLOW', overflowSummary(), ...maps.overflow.items.map((item) => `${item.kind.padEnd(8, ' ')}${describe(item.node)} · ${item.label}`)].join('\n'));
+    }
+    if (maps.headings.items) {
+      const warnings = outlineWarnings(maps.headings.items);
+      if (warnings.length) blocks.push(['OUTLINE', ...warnings].join('\n'));
+    }
+
     blocks.push(location.href);
     return blocks.join('\n\n');
   }
@@ -1501,7 +1977,7 @@
         const context = canvas.getContext('2d');
         context.drawImage(image, 0, 0);
 
-        const scale = image.naturalWidth / Math.max(innerWidth, 1);
+        const scale = window.devicePixelRatio || 1;
         const barHeight = Math.round(34 * scale);
         const padding = Math.round(14 * scale);
         context.fillStyle = 'rgba(11, 18, 32, .94)';
@@ -1545,7 +2021,7 @@
         dataUrl = null;
       }
 
-      panelBody.classList.remove('is-hidden');
+      panelBody.classList.toggle('is-hidden', state.poppedOut);
       toastNode.classList.remove('is-hidden');
 
       if (!dataUrl) {
@@ -1561,8 +2037,21 @@
     }));
   }
 
+  function placeToast() {
+    if (!panelBody || state.poppedOut) {
+      Object.assign(toastNode.style, { right: '16px', bottom: '16px' });
+      return;
+    }
+    const rect = panelBody.getBoundingClientRect();
+    const roomLeft = rect.left > 240;
+    Object.assign(toastNode.style, roomLeft
+      ? { right: `${innerWidth - rect.left + 12}px`, bottom: `${Math.max(innerHeight - rect.bottom, 8)}px` }
+      : { right: `${Math.max(innerWidth - rect.right, 8)}px`, bottom: `${innerHeight - rect.top + 12}px` });
+  }
+
   function toast(message) {
     if (!toastNode) return;
+    placeToast();
     toastNode.textContent = message;
     toastNode.classList.add('toast--visible');
     clearTimeout(toastTimer);
@@ -1596,208 +2085,81 @@
     toast(legacyCopy(text) ? message : 'Copy blocked by the page');
   }
 
-  function button(className, action, label, options = {}) {
-    const node = el('button', className);
-    node.type = 'button';
-    node.dataset.action = action;
-    if (options.index !== undefined) node.dataset.index = String(options.index);
-    if (options.value !== undefined) node.dataset.value = options.value;
-    if (options.pressed !== undefined) node.setAttribute('aria-pressed', String(options.pressed));
-    if (options.ariaLabel) node.setAttribute('aria-label', options.ariaLabel);
-    if (options.icon) node.append(icon(options.icon));
-    if (label) node.append(label);
-    return node;
-  }
+  /* ---------- snapshot & render ---------- */
 
-  function emptyHint() {
-    if (state.showFocusMap) return 'Click an element on the page to see its details.';
-    return state.showHover ? 'Move the pointer over the page.' : 'Turn on hover (H) to inspect elements.';
-  }
+  function snapshot(a11y) {
+    const hovered = state.hovered && state.hovered.isConnected ? state.hovered : null;
+    const hoveredRect = hovered ? hovered.getBoundingClientRect() : null;
+    const signed = (value) => `${value >= 0 ? '+' : ''}${r1(value)}`;
+    const info = a11y !== undefined ? a11y : hovered && state.showA11y ? accessibility(hovered) : null;
+    const preset = state.showGrid ? activePreset() : null;
+    const outline = state.showHeadings ? maps.headings.items : null;
+    const overflow = state.showOverflow ? maps.overflow.items : null;
+    const indexed = (items, kind) => (items || []).map((item, index) => ({ ...item, index })).filter((item) => item.kind === kind);
 
-  function renderPanel() {
-    clear(panelBody);
-
-    const head = el('header', 'panel__head');
-    const title = el('h2', 'panel__title');
-    title.append(el('span', 'panel__dot'), 'Layout Ruler');
-    head.append(
-      title,
-      button('panel__close', 'popout', '', { icon: ICONS.popout, ariaLabel: 'Move the panel to its own window' }),
-      button('panel__close', 'close', '', { icon: ICONS.close, ariaLabel: 'Close the layout inspector' })
-    );
-
-    const toggles = el('div', 'panel__row');
-    toggles.append(
-      button('btn', 'hover', 'hover', { pressed: state.showHover }),
-      button('btn', 'layout', 'grid / flex', { pressed: state.showLayout }),
-      button('btn', 'distances', 'distances', { pressed: state.showDistances }),
-      button('btn', 'contrast', 'contrast', { pressed: state.showContrast }),
-      button('btn', 'ruler', 'ruler', { icon: ICONS.ruler, pressed: state.ruler.enabled }),
-      button('btn', 'copy-on-click', 'click copies class', { pressed: state.copyOnClick }),
-      button('btn', 'focus-map', 'focus map', { pressed: state.showFocusMap })
-    );
-
-    const hoverSection = el('section', 'panel__section');
-    const hoverLabel = el('h3', 'panel__label');
-    hoverLabel.textContent = state.showFocusMap ? 'Selected' : 'Hovered';
-    hoverSection.append(hoverLabel);
-
-    if (state.hovered && state.hovered.isConnected) {
-      const name = el('p', 'name');
-      name.textContent = describe(state.hovered);
-      const facts = el('dl', 'facts');
-      factsFor(state.hovered).forEach(([key, value]) => {
-        const term = el('dt', 'facts__key');
-        term.textContent = key;
-        const detail = el('dd', 'facts__value');
-        detail.textContent = value;
-        facts.append(term, detail);
-      });
-      const actions = el('div', 'panel__row');
-      actions.append(
-        button('btn btn--primary', 'copy-element', 'Copy element', { icon: ICONS.copy }),
-        button('btn', 'export', 'Export PNG', { icon: ICONS.download })
-      );
-      hoverSection.append(name);
-      const classes = classButtons(state.hovered);
-      if (classes) hoverSection.append(classes);
-      hoverSection.append(facts, actions);
-    } else {
-      const empty = el('p', 'panel__empty');
-      empty.textContent = emptyHint();
-      hoverSection.append(empty);
-    }
-
-    const rulerSection = el('section', 'panel__section');
-    const rulerLabel = el('h3', 'panel__label');
-    rulerLabel.textContent = 'Ruler';
-    rulerSection.append(rulerLabel);
-
-    const measures = measurements();
-    if (measures.length) {
-      const list = el('ul', 'pins');
-      measures.forEach((measure) => {
-        const item = el('li', 'pins__item', { color: '#ed1941' });
-        const body = el('div');
-        const name = el('span', 'name');
-        name.textContent = `Measure ${measure.index}`;
-        const meta = el('p', 'pins__meta');
-        meta.textContent = measureFacts(measure).map(([key, value]) => `${key} ${value}`).join(' · ');
-        body.append(name, meta);
-        item.append(
-          el('span', 'pins__swatch'),
-          body,
-          button('pins__remove', 'unmeasure', '', { icon: ICONS.close, index: measure.index - 1, ariaLabel: `Remove measure ${measure.index}` })
-        );
-        list.append(item);
-      });
-      const actions = el('div', 'panel__row');
-      actions.append(button('btn', 'clear-measures', 'Clear measures', { icon: ICONS.trash }));
-      rulerSection.append(list, actions);
-    } else {
-      const empty = el('p', 'panel__empty');
-      empty.textContent = state.ruler.enabled
-        ? 'Drag on the page to measure. Shift keeps it straight, edges snap.'
-        : 'Press R, then drag on the page to measure.';
-      rulerSection.append(empty);
-    }
-
-    const pinSection = el('section', 'panel__section');
-    const pinLabel = el('h3', 'panel__label');
-    pinLabel.textContent = `Frozen · ${state.pins.length}`;
-    pinSection.append(pinLabel);
-
-    if (!state.pins.length) {
-      const empty = el('p', 'panel__empty');
-      empty.textContent = 'Press F to freeze the hovered element.';
-      pinSection.append(empty);
-    } else {
-      const list = el('ul', 'pins');
-      const hoveredRect = state.hovered && state.hovered.isConnected ? state.hovered.getBoundingClientRect() : null;
-
-      state.pins.forEach((pin, index) => {
-        const item = el('li', 'pins__item', { color: pin.color });
-        const body = el('div');
-        const name = el('span', 'name');
-        name.textContent = describe(pin.el);
+    return {
+      viewport: `${innerWidth} × ${innerHeight}${preset ? ` · ${preset.name}` : ''}`,
+      child: state.claimed,
+      toggles: {
+        layout: state.showLayout,
+        ruler: state.ruler.enabled,
+        'grid-ruler': state.showGridRuler,
+        'layout-grid': state.showGrid,
+        design: state.showDesign,
+        contrast: state.showContrast,
+        a11y: state.showA11y,
+        headings: state.showHeadings,
+        'focus-map': state.showFocusMap,
+        overflow: state.showOverflow,
+        spacing: state.showSpacing,
+        'copy-on-click': state.copyOnClick
+      },
+      hovered: hovered ? {
+        name: describe(hovered),
+        classes: classNames(hovered),
+        facts: factsFor(hovered),
+        a11y: info?.facts || null,
+        flags: info?.flags || [],
+        frame: isFrame(hovered)
+      } : null,
+      overflow: state.showOverflow ? {
+        summary: overflowSummary(),
+        scanning: !overflow,
+        items: indexed(overflow, 'overflow').concat(indexed(overflow, 'clips'))
+          .map((item) => ({ index: item.index, kind: item.kind, name: describe(item.node), label: item.label }))
+      } : null,
+      outline: state.showHeadings ? {
+        warnings: outline ? outlineWarnings(outline) : [],
+        headings: indexed(outline, 'heading').map(({ index, level, text }) => ({ index, level, text })),
+        landmarks: indexed(outline, 'landmark').map(({ index, role, name }) => ({ index, role, name }))
+      } : null,
+      grid: preset ? { preset: { ...preset }, origin: location.host } : null,
+      design: state.showDesign ? { ...state.design, key: designKey() } : null,
+      spacing: state.showSpacing ? { base: state.spacingBase, rootFontSize: rootFontSize() } : null,
+      measures: measurements().map((measure) => ({ index: measure.index, facts: measureFacts(measure) })),
+      pins: state.pins.map((pin) => {
         const rect = pin.el.getBoundingClientRect();
-        const meta = el('p', 'pins__meta');
-        meta.textContent = `${r1(rect.width)} × ${r1(rect.height)}`;
-        body.append(name);
-        const classes = classButtons(pin.el);
-        if (classes) body.append(classes);
-        body.append(meta);
-
-        if (hoveredRect && state.hovered !== pin.el) {
-          const delta = el('p', 'pins__meta pins__delta');
-          const deltaWidth = hoveredRect.width - rect.width;
-          const deltaHeight = hoveredRect.height - rect.height;
-          delta.textContent = `Δ ${deltaWidth >= 0 ? '+' : ''}${r1(deltaWidth)} × ${deltaHeight >= 0 ? '+' : ''}${r1(deltaHeight)}`;
-          body.append(delta);
-        }
-
-        item.append(
-          el('span', 'pins__swatch'),
-          body,
-          button('pins__remove', 'unpin', '', { icon: ICONS.close, index, ariaLabel: `Unfreeze ${describe(pin.el)}` })
-        );
-        list.append(item);
-      });
-
-      const actions = el('div', 'panel__row');
-      actions.append(
-        button('btn', 'copy-report', 'Copy report', { icon: ICONS.copy }),
-      button('btn', 'export', 'Export PNG', { icon: ICONS.download }),
-        button('btn', 'clear', 'Clear', { icon: ICONS.trash })
-      );
-      pinSection.append(list, actions);
-    }
-
-    const keys = el('dl', 'keys');
-    [
-      ['H', 'hover'],
-      ['F', 'freeze'],
-      ['R', 'ruler'],
-      ['E', 'export'],
-      ['C', 'copy'],
-      ['⇧C', 'report'],
-      ['X', 'clear'],
-      ['L', 'grid/flex'],
-      ['D', 'distance'],
-      ['A', 'contrast'],
-      ['N', 'navigate'],
-      ['T', 'focus map'],
-      ['Esc', 'exit']
-    ].forEach(([key, description]) => {
-      const term = el('dt', 'keys__key');
-      term.textContent = key;
-      const detail = el('dd', 'keys__value');
-      detail.textContent = description;
-      keys.append(term, detail);
-    });
-
-    panelBody.append(
-      head,
-      toggles,
-      el('div', 'panel__divider'),
-      hoverSection,
-      rulerSection,
-      pinSection,
-      el('div', 'panel__divider'),
-      keys
-    );
+        return {
+          name: describe(pin.el),
+          classes: classNames(pin.el),
+          color: pin.color,
+          size: `${r1(rect.width)} × ${r1(rect.height)}`,
+          delta: hoveredRect && state.hovered !== pin.el
+            ? `Δ ${signed(hoveredRect.width - rect.width)} × ${signed(hoveredRect.height - rect.height)}`
+            : ''
+        };
+      })
+    };
   }
 
   function signature() {
     const parts = [
-      state.showHover,
-      state.showLayout,
-      state.showDistances,
-      state.showContrast,
       state.ruler.enabled,
-      state.copyOnClick,
-      state.showFocusMap,
       state.pins.length,
+      innerWidth,
+      innerHeight,
+      scrollX,
+      scrollY,
       measurements().map(({ from, to }) => `${from.x}:${from.y}:${to.x}:${to.y}`).join(',') || '-'
     ];
     const push = (node) => {
@@ -1815,11 +2177,13 @@
 
   function render() {
     Object.values(layers).forEach(clear);
+    drawGridRuler();
+    drawLayoutGrid();
     drawPins();
 
     const hovered = state.hovered && state.hovered.isConnected ? state.hovered : null;
-    if (hovered) drawBoxModel(hovered);
-    if (hovered && !state.showFocusMap) {
+    if (hovered) {
+      drawBoxModel(hovered);
       spacingLabels(hovered);
       if (state.showLayout) {
         drawLayout(hovered);
@@ -1827,7 +2191,7 @@
       }
     }
 
-    if (state.showDistances && hovered) {
+    if (state.showLayout && hovered) {
       const hoveredRect = hovered.getBoundingClientRect();
       state.pins.forEach((pin) => {
         if (pin.el === hovered || !pin.el.isConnected) return;
@@ -1836,12 +2200,14 @@
     }
 
     drawRuler();
-    refreshFocusMap(true);
+    refreshMaps(true);
+    placeDesign();
 
-    if (hovered && state.showFocusMap) drawFocusTip(hovered);
-    else if (hovered) drawTip(hovered);
-    renderPanel();
-    pushState();
+    const info = hovered && state.showA11y ? accessibility(hovered) : null;
+    if (hovered) drawTip(hovered, info);
+    const snap = snapshot(info);
+    if (!state.poppedOut) Panel.render(panelBody, snap, { mode: 'page', level: 2 });
+    pushState(snap);
   }
 
   function tick() {
@@ -1850,7 +2216,7 @@
     if (next !== lastSignature) {
       lastSignature = next;
       render();
-    } else refreshFocusMap(false);
+    } else refreshMaps(false);
     rafId = requestAnimationFrame(tick);
   }
 
@@ -1858,11 +2224,12 @@
     lastSignature = '';
   }
 
+  /* ---------- events ---------- */
+
   function onPointerMove(event) {
-    if (!state.active) return;
-    if (state.locked || state.showFocusMap || !state.showHover) return;
+    if (!state.active || state.locked) return;
     const path = event.composedPath();
-    if (path.includes(panelBody) || path.some((node) => node.classList?.contains('chip--positioned'))) return;
+    if (path.includes(host) && !path.includes(captureNode)) return;
     const target = topElementAt(event.clientX, event.clientY);
     if (!target) return;
     if (target !== state.hovered) {
@@ -1871,21 +2238,8 @@
     }
   }
 
-  function onPageDown(event) {
-    if (!state.active || !state.showFocusMap || event.composedPath().includes(host)) return;
-    event.preventDefault();
-    event.stopPropagation();
-  }
-
   function onPageClick(event) {
-    if (!state.active || event.button !== 0 || event.composedPath().includes(host)) return;
-    if (state.showFocusMap) {
-      event.preventDefault();
-      event.stopPropagation();
-      selectInMap(topElementAt(event.clientX, event.clientY));
-      return;
-    }
-    if (!state.copyOnClick) return;
+    if (!state.active || !state.copyOnClick || state.showGridRuler || event.button !== 0 || event.composedPath().includes(host)) return;
     event.preventDefault();
     event.stopPropagation();
     if (state.locked) {
@@ -1908,21 +2262,6 @@
     const index = state.pins.findIndex((pin) => pin.el === node);
     if (index >= 0) state.pins.splice(index, 1);
     else state.pins.push({ el: node, color: PIN_COLORS[state.pins.length % PIN_COLORS.length] });
-    invalidate();
-  }
-
-  function toggleHover() {
-    state.showHover = !state.showHover;
-    if (!state.showHover && !state.showFocusMap) {
-      state.hovered = null;
-      state.locked = false;
-    }
-    invalidate();
-  }
-
-  function toggleCopyOnClick() {
-    state.copyOnClick = !state.copyOnClick;
-    toast(state.copyOnClick ? 'Click copies the class' : 'Clicks reach the page');
     invalidate();
   }
 
@@ -1960,39 +2299,148 @@
     panelBody.classList.remove('panel--dragging');
   }
 
-  function runAction(action, index, value) {
-    if (action === 'close') deactivate();
-    if (action === 'freeze') togglePin(state.hovered);
-    if (action === 'hover') toggleHover();
-    if (action === 'layout') state.showLayout = !state.showLayout;
-    if (action === 'distances') state.showDistances = !state.showDistances;
-    if (action === 'contrast') state.showContrast = !state.showContrast;
-    if (action === 'ruler') setRulerEnabled(!state.ruler.enabled);
-    if (action === 'copy-on-click') toggleCopyOnClick();
+  /* ---------- iframe hand-off ---------- */
+
+  const claims = { posted: new Map(), broadcast: new Map() };
+
+  function tryClaim(token) {
+    if (!claims.posted.has(token) || !claims.broadcast.has(token)) return;
+    const parentFrameId = claims.broadcast.get(token);
+    claims.posted.delete(token);
+    claims.broadcast.delete(token);
+    state.claimed = true;
+    activate();
+    send({ type: 'layout-ruler/claimed', parentFrameId });
+  }
+
+  function noteClaim(store, token, value) {
+    store.set(token, value);
+    setTimeout(() => store.delete(token), 5000);
+    tryClaim(token);
+  }
+
+  window.addEventListener('message', (event) => {
+    if (window.parent === window || event.source !== window.parent) return;
+    const token = event.data?.layoutRulerToken;
+    if (typeof token === 'string') noteClaim(claims.posted, token, true);
+  });
+
+  async function enterFrame() {
+    const frame = state.hovered;
+    if (!isFrame(frame) || !frame.contentWindow) {
+      toast('Hover an iframe first');
+      return;
+    }
+    const token = crypto.randomUUID();
+    try {
+      await chrome.runtime.sendMessage({ type: 'layout-ruler/prepare-frames' });
+      frame.contentWindow.postMessage({ layoutRulerToken: token }, '*');
+      send({ type: 'layout-ruler/claim', token });
+      setTimeout(() => {
+        if (state.active) toast('This iframe can’t be inspected');
+      }, 1500);
+    } catch (error) {
+      toast('This iframe can’t be inspected');
+    }
+  }
+
+  function exitFrame() {
+    state.claimed = false;
+    deactivate();
+    send({ type: 'layout-ruler/exit-frame' });
+  }
+
+  function close() {
+    const child = state.claimed;
+    state.claimed = false;
+    deactivate();
+    if (child || window.top === window) send({ type: 'layout-ruler/closed' });
+  }
+
+  function escape() {
+    if (state.locked) state.locked = false;
+    else if (state.ruler.enabled) setRulerEnabled(false);
+    else if (state.claimed) exitFrame();
+    else close();
+  }
+
+  /* ---------- actions ---------- */
+
+  function reveal(index, kind) {
+    const node = (kind === 'overflow' ? maps.overflow : maps.headings).items?.[index]?.node;
+    if (!node?.isConnected) return;
+    node.scrollIntoView({ block: 'center', inline: 'nearest' });
+    lockOn(node);
+  }
+
+  function setField(field, value) {
+    const [group, key] = String(field).split('.');
+    if (group === 'grid') setGridField(key, value);
+    else if (group === 'design') setDesignField(key, value);
+    else if (group === 'spacing' && key === 'base' && value > 0) {
+      state.spacingBase = value;
+      saveSettings();
+    }
+  }
+
+  function toggle(action) {
+    const key = TOGGLES[action];
     if (action === 'focus-map') toggleFocusMap();
-    if (action === 'unpin') state.pins.splice(Number(index), 1);
-    if (action === 'unmeasure') state.ruler.measures.splice(Number(index), 1);
-    if (action === 'clear-measures') clearMeasures();
-    if (action === 'clear') state.pins = [];
-    if (action === 'copy-element') copy(measurementText(state.hovered), 'Element copied');
-    if (action === 'copy-report') copy(reportText(), 'Report copied');
-    if (action === 'copy-class') copy(value, `${value} copied`);
-    if (action === 'export') exportPng();
-    if (action === 'popout') setPoppedOut(true);
-    if (action === 'popin') setPoppedOut(false);
+    else state[key] = !state[key];
+    if (action === 'copy-on-click') toast(state.copyOnClick ? 'Click copies the class' : 'Clicks reach the page');
+    if (action === 'design' && state.showDesign) loadDesign();
+    if (action === 'overflow' && state.showOverflow) toast('Scanning for overflow…');
+    saveSettings();
+  }
+
+  function runAction(action, index, value) {
+    if (TOGGLES[action]) toggle(action);
+    else if (action === 'close') close();
+    else if (action === 'escape') escape();
+    else if (action === 'enter-frame') enterFrame();
+    else if (action === 'exit-frame') exitFrame();
+    else if (action === 'freeze') togglePin(state.hovered);
+    else if (action === 'ruler') setRulerEnabled(!state.ruler.enabled);
+    else if (action === 'unpin') state.pins.splice(Number(index), 1);
+    else if (action === 'unmeasure') state.ruler.measures.splice(Number(index), 1);
+    else if (action === 'clear-measures') clearMeasures();
+    else if (action === 'clear') state.pins = [];
+    else if (action === 'clear-all') {
+      state.pins = [];
+      clearMeasures();
+    } else if (action === 'copy-element') copy(measurementText(state.hovered), 'Element copied');
+    else if (action === 'copy-report') copy(reportText(), 'Report copied');
+    else if (action === 'copy-class') copy(value, `${value} copied`);
+    else if (action === 'export') exportPng();
+    else if (action === 'popout') setPoppedOut(true);
+    else if (action === 'popin') setPoppedOut(false);
+    else if (action === 'reveal') reveal(Number(index), value);
+    else if (action === 'set') setField(index, value);
+    else if (action === 'grid-reset') {
+      state.presets = DEFAULT_PRESETS.map((preset) => ({ ...preset }));
+      chrome.storage.local.remove(gridKey()).catch(() => {});
+    } else if (action === 'design-scroll' || action === 'design-blend') {
+      const key = action === 'design-scroll' ? 'scroll' : 'blend';
+      state.design[key] = !state.design[key];
+      placeDesign();
+      saveDesignSettings();
+    } else if (action === 'design-remove') removeDesign();
+    else if (action === 'design-reload') loadDesign();
+    else if (action === 'design-file') useDesignFile(value);
     invalidate();
   }
 
-  function onPanelClick(event) {
-    const trigger = event.target.closest('button');
-    if (!trigger) return;
-    runAction(trigger.dataset.action, trigger.dataset.index, trigger.dataset.value);
+  function dispatchLocal(action, index, value) {
+    runAction(action, index, value);
   }
 
   function setPoppedOut(poppedOut) {
     state.poppedOut = poppedOut;
     panelBody.classList.toggle('is-hidden', poppedOut);
     send({ type: poppedOut ? 'layout-ruler/popout' : 'layout-ruler/popout-close' });
+    if (!poppedOut) {
+      panelBody.layoutRulerSignatures = {};
+    }
     invalidate();
   }
 
@@ -2004,78 +2452,27 @@
     }
   }
 
-  function snapshot() {
-    const hovered = state.hovered && state.hovered.isConnected ? state.hovered : null;
-    const hoveredRect = hovered ? hovered.getBoundingClientRect() : null;
-    const signed = (value) => `${value >= 0 ? '+' : ''}${r1(value)}`;
-
-    return {
-      showHover: state.showHover,
-      showLayout: state.showLayout,
-      showDistances: state.showDistances,
-      showContrast: state.showContrast,
-      rulerEnabled: state.ruler.enabled,
-      copyOnClick: state.copyOnClick,
-      showFocusMap: state.showFocusMap,
-      hovered: hovered ? { name: describe(hovered), classes: classNames(hovered), facts: factsFor(hovered) } : null,
-      measures: measurements().map((measure) => ({ index: measure.index, facts: measureFacts(measure) })),
-      pins: state.pins.map((pin) => {
-        const rect = pin.el.getBoundingClientRect();
-        return {
-          name: describe(pin.el),
-          classes: classNames(pin.el),
-          color: pin.color,
-          size: `${r1(rect.width)} × ${r1(rect.height)}`,
-          delta: hoveredRect && state.hovered !== pin.el
-            ? `Δ ${signed(hoveredRect.width - rect.width)} × ${signed(hoveredRect.height - rect.height)}`
-            : ''
-        };
-      })
-    };
+  function flushState() {
+    clearTimeout(pushTimer);
+    pushTimer = 0;
+    lastPush = performance.now();
+    if (pendingSnapshot) send({ type: 'layout-ruler/state', payload: pendingSnapshot });
   }
 
-  function pushState() {
+  function pushState(snap, force) {
     if (!state.poppedOut) return;
-    const now = performance.now();
-    if (now - lastPush < 60) return;
-    lastPush = now;
-    send({ type: 'layout-ruler/state', payload: snapshot() });
-  }
-
-  function isEditable(node) {
-    if (!node || !node.tagName) return false;
-    return node.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName);
+    pendingSnapshot = snap;
+    const wait = 60 - (performance.now() - lastPush);
+    if (force || wait <= 0) flushState();
+    else if (!pushTimer) pushTimer = setTimeout(flushState, wait);
   }
 
   function onKeyDown(event) {
-    if (!state.active || event.metaKey || event.ctrlKey || event.altKey) return;
-    if (isEditable(event.target)) return;
-
-    if (event.key === 'Escape') {
-      if (state.locked) {
-        state.locked = false;
-        if (state.showFocusMap) state.hovered = null;
-        invalidate();
-      } else if (state.ruler.enabled) setRulerEnabled(false);
-      else deactivate();
-      event.preventDefault();
-      return;
-    }
-
-    const key = event.key.toLowerCase();
-    if (key === 'f') togglePin(state.hovered);
-    else if (key === 'c') copy(event.shiftKey ? reportText() : measurementText(state.hovered), event.shiftKey ? 'Report copied' : 'Element copied');
-    else if (key === 'e') exportPng();
-    else if (key === 'r') setRulerEnabled(!state.ruler.enabled);
-    else if (key === 'x') { state.pins = []; clearMeasures(); }
-    else if (key === 'l') { state.showLayout = !state.showLayout; invalidate(); }
-    else if (key === 'd') { state.showDistances = !state.showDistances; invalidate(); }
-    else if (key === 'a') { state.showContrast = !state.showContrast; invalidate(); }
-    else if (key === 'n') toggleCopyOnClick();
-    else if (key === 'h') toggleHover();
-    else if (key === 't') toggleFocusMap();
-    else return;
-
+    if (!state.active) return;
+    const action = Panel.keyAction(event);
+    if (!action) return;
+    if (action === 'enter-frame' && !isFrame(state.hovered)) return;
+    runAction(action);
     event.preventDefault();
     event.stopPropagation();
   }
@@ -2088,20 +2485,24 @@
     invalidate();
   }
 
-  function activate() {
+  async function activate() {
     if (state.active) return;
-    if (!host) build();
-    if (!host.isConnected) document.documentElement.append(host);
-    host.hidden = false;
-    Object.assign(state, { showHover: false, showLayout: false, showDistances: false, showContrast: false, copyOnClick: false, showFocusMap: false });
     state.active = true;
+    building ||= build();
+    await Promise.all([building, settingsReady, loadPresets()]);
+    if (!state.active) return;
+    if (!host.isConnected) document.documentElement.append(designHost, host);
+    host.hidden = false;
+    designHost.hidden = false;
+    if (state.showDesign) loadDesign();
+    cancelAnimationFrame(rafId);
     document.addEventListener('mousemove', onPointerMove, true);
+    document.addEventListener('mouseover', onPointerMove, true);
     window.addEventListener('mousemove', onRulerMove, true);
     window.addEventListener('mouseup', onRulerUp, true);
     window.addEventListener('mousemove', onPanelMove, true);
     window.addEventListener('mouseup', onPanelUp, true);
     window.addEventListener('keydown', onKeyDown, true);
-    window.addEventListener('mousedown', onPageDown, true);
     window.addEventListener('click', onPageClick, true);
     window.addEventListener('scroll', onViewportChange, true);
     window.addEventListener('resize', onViewportChange, true);
@@ -2114,46 +2515,68 @@
     state.active = false;
     state.hovered = null;
     state.locked = false;
+    if (!host) return;
     setRulerEnabled(false);
     if (state.poppedOut) setPoppedOut(false);
     cancelAnimationFrame(rafId);
     document.removeEventListener('mousemove', onPointerMove, true);
+    document.removeEventListener('mouseover', onPointerMove, true);
     window.removeEventListener('mousemove', onRulerMove, true);
     window.removeEventListener('mouseup', onRulerUp, true);
     window.removeEventListener('mousemove', onPanelMove, true);
     window.removeEventListener('mouseup', onPanelUp, true);
     window.removeEventListener('keydown', onKeyDown, true);
-    window.removeEventListener('mousedown', onPageDown, true);
     window.removeEventListener('click', onPageClick, true);
     window.removeEventListener('scroll', onViewportChange, true);
     window.removeEventListener('resize', onViewportChange, true);
-    if (host) host.hidden = true;
+    Object.values(maps).forEach((map) => {
+      map.items = null;
+      map.content = null;
+      map.geometry = '';
+    });
+    placeDesign();
+    host.hidden = true;
+    designHost.hidden = true;
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === 'layout-ruler/toggle') {
-      if (state.active) deactivate();
+    const type = message?.type;
+    if (type === 'layout-ruler/toggle') {
+      if (state.active) close();
       else activate();
+      sendResponse({ active: state.active });
+      return false;
     }
-    if (message?.type === 'layout-ruler/command') {
-      if (message.action === 'ping') pushState();
-      else if (message.remote && message.action === 'copy-element') send({ type: 'layout-ruler/clip', text: measurementText(state.hovered), label: 'Element copied' });
-      else if (message.remote && message.action === 'copy-report') send({ type: 'layout-ruler/clip', text: reportText(), label: 'Report copied' });
-      else if (message.remote && message.action === 'copy-class') send({ type: 'layout-ruler/clip', text: message.value, label: `${message.value} copied` });
-      else runAction(message.action, message.index, message.value);
+    if (type === 'layout-ruler/command') {
+      const { action, index, value, remote } = message;
+      if (action === 'ping') pushState(snapshot(), true);
+      else if (remote && action === 'copy-element') send({ type: 'layout-ruler/clip', text: measurementText(state.hovered), label: 'Element copied' });
+      else if (remote && action === 'copy-report') send({ type: 'layout-ruler/clip', text: reportText(), label: 'Report copied' });
+      else if (remote && action === 'copy-class') send({ type: 'layout-ruler/clip', text: value, label: `${value} copied` });
+      else if (action === 'enter-frame' && !isFrame(state.hovered)) toast('Hover an iframe first');
+      else runAction(action, index, value);
     }
-    if (message?.type === 'layout-ruler/popin') {
+    if (type === 'layout-ruler/popin' && panelBody) {
       state.poppedOut = false;
       panelBody.classList.remove('is-hidden');
+      panelBody.layoutRulerSignatures = {};
       invalidate();
     }
-    if (message?.type === 'layout-ruler/clear') {
-      state.pins = [];
-      invalidate();
+    if (type === 'layout-ruler/claim' && typeof message.token === 'string') {
+      noteClaim(claims.broadcast, message.token, message.parentFrameId);
     }
-    sendResponse({ active: state.active, pins: state.pins.length });
-    return true;
+    if (type === 'layout-ruler/suspend') deactivate();
+    if (type === 'layout-ruler/resume') activate();
+    return false;
   });
 
-  window.__layoutRuler = { activate, deactivate, state };
+  window.__layoutRuler = { activate, deactivate, state, alive: () => Boolean(chrome.runtime?.id) };
+
+  if (window.top === window) {
+    chrome.runtime.sendMessage({ type: 'layout-ruler/restore' })
+      .then((response) => {
+        if (response?.active) activate();
+      })
+      .catch(() => {});
+  }
 })();

@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Layout Ruler",
-  "version": "1.17.0",
+  "version": "1.21.0",
+  "minimum_chrome_version": "130",
   "author": "Catherine Pitsigavdaki",
-  "description": "Hover any element to inspect size, spacing, grid, flex and colour contrast. Freeze elements to compare them.",
+  "description": "Hover any element to inspect size, spacing, grid, flex, colour contrast and accessibility. Freeze elements to compare them.",
   "permissions": [
     "scripting",
     "activeTab",
@@ -23,7 +24,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Layout Ruler \u2014 toggle inspector",
+    "default_title": "Layout Ruler — toggle inspector",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
@@ -45,10 +46,21 @@
         "<all_urls>"
       ],
       "js": [
+        "panel/render.js",
         "content/inspector.js"
       ],
       "run_at": "document_idle",
-      "all_frames": true
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "panel/panel.css"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }
