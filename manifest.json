@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Layout Ruler",
-  "version": "1.21.0",
+  "name": "FE Inspector",
+  "version": "1.23.0",
   "minimum_chrome_version": "130",
   "author": "Catherine Pitsigavdaki",
   "description": "Hover any element to inspect size, spacing, grid, flex, colour contrast and accessibility. Freeze elements to compare them.",
@@ -24,7 +24,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Layout Ruler — toggle inspector",
+    "default_title": "FE Inspector — toggle",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
@@ -37,7 +37,7 @@
       "suggested_key": {
         "default": "Alt+Shift+I"
       },
-      "description": "Toggle the layout inspector"
+      "description": "Toggle FE Inspector"
     }
   },
   "content_scripts": [

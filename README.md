@@ -1,4 +1,4 @@
-# Layout Ruler
+# FE Inspector
 
 Chrome extension (MV3) that inspects layout on hover: box model, sizes, spacing, grid tracks, flex gaps —
 and lets you freeze elements to measure and compare against whatever you hover next. It also checks
@@ -52,7 +52,7 @@ Requires Chrome 130 or later.
   max width, starting width). Presets are saved per site. A chip at the top shows the viewport size and preset.
 - **Design image** (`P`): choose or paste a PNG / JPG / WebP and it is laid over the page. You can set:
   - opacity
-  - X / Y offset (the arrow keys step the number fields)
+  - X / Y offset (the arrow keys step the number fields), or turn on **drag to move** and drag the image on the page
   - scale: 1×, 2× for retina exports, or fit to width
   - whether it scrolls with the page
   - a **difference** blend, which turns matching pixels black

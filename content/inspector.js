@@ -56,6 +56,7 @@
     spacingBase: 4,
     presets: DEFAULT_PRESETS.map((preset) => ({ ...preset })),
     design: { has: false, opacity: 50, x: 0, y: 0, scale: '1', scroll: true, blend: false },
+    designDrag: false,
     ruler: { enabled: false, dragging: false, from: null, to: null, measures: [] },
     poppedOut: false
   };
@@ -68,6 +69,7 @@
   let designHost = null;
   let designCanvas = null;
   let designImage = null;
+  const designMove = { active: false, startX: 0, startY: 0, x: 0, y: 0 };
   let rootBackground = null;
   let building = null;
   const drag = { active: false, offsetX: 0, offsetY: 0 };
@@ -323,6 +325,11 @@
       left: 0;
       top: 0;
     }
+    .design--draggable {
+      pointer-events: auto;
+      cursor: move;
+      touch-action: none;
+    }
   `;
 
   function el(tag, className, styles) {
@@ -376,7 +383,7 @@
     root.append(captureNode);
 
     panelBody = el('aside', 'panel panel--page panel--loading');
-    panelBody.setAttribute('aria-label', 'Layout Ruler');
+    panelBody.setAttribute('aria-label', 'FE Inspector');
     Panel.bind(panelBody, dispatchLocal);
     panelBody.addEventListener('mousedown', onPanelDown);
     root.append(panelBody);
@@ -392,6 +399,10 @@
     designStyle.textContent = DESIGN_STYLE;
     designCanvas = document.createElement('canvas');
     designCanvas.hidden = true;
+    designCanvas.addEventListener('pointerdown', onDesignDown);
+    designCanvas.addEventListener('pointermove', onDesignMove);
+    designCanvas.addEventListener('pointerup', onDesignUp);
+    designCanvas.addEventListener('pointercancel', onDesignUp);
     designRoot.append(designStyle, designCanvas);
 
     document.documentElement.append(designHost, host);
@@ -1573,6 +1584,7 @@
     const visible = state.active && state.showDesign && Boolean(designImage);
     designCanvas.hidden = !visible;
     setBlend(visible && state.design.blend);
+    designCanvas.classList.toggle('design--draggable', visible && state.designDrag);
     if (!visible) return;
     const { opacity, x, y, scale, scroll } = state.design;
     const width = scale === 'fit' ? document.documentElement.clientWidth : designImage.width / (scale === '2' ? 2 : 1);
@@ -1581,6 +1593,27 @@
       opacity: String(Math.min(100, Math.max(0, opacity)) / 100),
       transform: `translate(${x - (scroll ? scrollX : 0)}px, ${y - (scroll ? scrollY : 0)}px)`
     });
+  }
+
+  function onDesignDown(event) {
+    if (!state.designDrag || event.button !== 0) return;
+    designCanvas.setPointerCapture(event.pointerId);
+    Object.assign(designMove, { active: true, startX: event.clientX, startY: event.clientY, x: state.design.x, y: state.design.y });
+    event.preventDefault();
+  }
+
+  function onDesignMove(event) {
+    if (!designMove.active) return;
+    state.design.x = Math.round(designMove.x + event.clientX - designMove.startX);
+    state.design.y = Math.round(designMove.y + event.clientY - designMove.startY);
+    placeDesign();
+    invalidate();
+  }
+
+  function onDesignUp() {
+    if (!designMove.active) return;
+    designMove.active = false;
+    saveDesignSettings();
   }
 
   function setDesignField(field, value) {
@@ -2134,7 +2167,7 @@
         landmarks: indexed(outline, 'landmark').map(({ index, role, name }) => ({ index, role, name }))
       } : null,
       grid: preset ? { preset: { ...preset }, origin: location.host } : null,
-      design: state.showDesign ? { ...state.design, key: designKey() } : null,
+      design: state.showDesign ? { ...state.design, drag: state.designDrag, key: designKey() } : null,
       spacing: state.showSpacing ? { base: state.spacingBase, rootFontSize: rootFontSize() } : null,
       measures: measurements().map((measure) => ({ index: measure.index, facts: measureFacts(measure) })),
       pins: state.pins.map((pin) => {
@@ -2239,7 +2272,7 @@
   }
 
   function onPageClick(event) {
-    if (!state.active || !state.copyOnClick || state.showGridRuler || event.button !== 0 || event.composedPath().includes(host)) return;
+    if (!state.active || !state.copyOnClick || state.showGridRuler || event.button !== 0 || event.composedPath().includes(host) || event.composedPath().includes(designHost)) return;
     event.preventDefault();
     event.stopPropagation();
     if (state.locked) {
@@ -2424,6 +2457,9 @@
       state.design[key] = !state.design[key];
       placeDesign();
       saveDesignSettings();
+    } else if (action === 'design-drag') {
+      state.designDrag = !state.designDrag;
+      placeDesign();
     } else if (action === 'design-remove') removeDesign();
     else if (action === 'design-reload') loadDesign();
     else if (action === 'design-file') useDesignFile(value);

@@ -183,7 +183,7 @@ globalThis.LayoutRulerPanel = (() => {
     head(slice, options) {
       const head = el('header', 'panel__head');
       const title = el(`h${options.level}`, 'panel__title');
-      title.append(el('span', 'panel__dot'), 'Layout Ruler');
+      title.append(el('span', 'panel__dot'), 'FE Inspector');
       const buttons = options.mode === 'window'
         ? [button('panel__close', 'popin', '', { icon: ICONS.popin, ariaLabel: 'Put the panel back in the page' })]
         : [
@@ -354,6 +354,7 @@ globalThis.LayoutRulerPanel = (() => {
         fields,
         scale,
         row(
+          button('btn', 'design-drag', 'drag to move', { pressed: slice.drag }),
           button('btn', 'design-scroll', 'scrolls with page', { pressed: slice.scroll }),
           button('btn', 'design-blend', 'difference blend', { pressed: slice.blend }),
           button('btn', 'design-remove', 'Remove image', { icon: ICONS.trash })

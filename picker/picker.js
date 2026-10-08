@@ -867,7 +867,7 @@ async function load() {
     await showScreenshot(stored.dataUrl);
     const blocked = stored.url?.startsWith('file:') && !(await chrome.extension.isAllowedFileSchemeAccess());
     say(blocked
-      ? 'Local PDFs need "Allow access to file URLs" (chrome://extensions → Layout Ruler → Details), or use "Open a PDF file" above to pick the file. Showing a screenshot of the visible area meanwhile.'
+      ? 'Local PDFs need "Allow access to file URLs" (chrome://extensions → FE Inspector → Details), or use "Open a PDF file" above to pick the file. Showing a screenshot of the visible area meanwhile.'
       : `The PDF could not be loaded (${error?.message || error}). Use "Open a PDF file" above to pick it, or see the screenshot of the visible area.`);
   }
 }
