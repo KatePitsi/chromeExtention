@@ -18,16 +18,17 @@
 
   const TOGGLES = {
     layout: 'showLayout',
-    contrast: 'showContrast',
     'copy-on-click': 'copyOnClick',
     'focus-map': 'showFocusMap',
-    a11y: 'showA11y',
     headings: 'showHeadings',
     overflow: 'showOverflow',
     'layout-grid': 'showGrid',
     'grid-ruler': 'showGridRuler',
     design: 'showDesign',
-    spacing: 'showSpacing'
+    spacing: 'showSpacing',
+    layers: 'showLayers',
+    viewport: 'showViewport',
+    'safe-areas': 'showSafeAreas'
   };
 
   const DEFAULT_PRESETS = [
@@ -42,17 +43,19 @@
     hovered: null,
     locked: false,
     pins: [],
-    showLayout: true,
-    showContrast: true,
-    copyOnClick: true,
+    showLayout: false,
+    copyOnClick: false,
     showFocusMap: false,
-    showA11y: false,
     showHeadings: false,
     showOverflow: false,
     showGrid: false,
     showGridRuler: false,
     showDesign: false,
     showSpacing: false,
+    showLayers: false,
+    showViewport: false,
+    showSafeAreas: false,
+    viewportSize: { width: 375, height: 667 },
     spacingBase: 4,
     presets: DEFAULT_PRESETS.map((preset) => ({ ...preset })),
     design: { has: false, opacity: 50, x: 0, y: 0, scale: '1', scroll: true, blend: false },
@@ -127,6 +130,20 @@
     .chip--track { background: rgba(217, 70, 239, .95); }
     .chip--warn { background: #b45309; color: #ffffff; }
     .chip--viewport { background: #c8102e; color: #ffffff; }
+    .fold {
+      position: fixed;
+      left: 0;
+      right: 0;
+      border-top: 2px dashed #f97316;
+    }
+    .fold__shade {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(15, 23, 42, .06);
+    }
+    .chip--fold { background: #c2410c; color: #ffffff; }
     .tip {
       position: fixed;
       display: grid;
@@ -140,8 +157,21 @@
     }
     .tip__name { color: #f87a90; word-break: break-all; }
     .tip__size { color: #fcd34d; }
-    .tip__row { color: #cbd5e1; }
+    .tip__facts {
+      display: grid;
+      grid-template-columns: max-content minmax(0, 1fr);
+      gap: 2px 10px;
+      margin: 4px 0 0;
+    }
+    .tip__key { color: #94a3b8; }
+    .tip__value {
+      margin: 0;
+      color: #f8fafc;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
     .tip__hint { color: #fcd34d; }
+    .tip__issue { color: #fca5a5; }
     .rule {
       position: fixed;
       border-color: currentColor;
@@ -180,6 +210,22 @@
       cursor: pointer;
       pointer-events: auto;
     }
+    .layer {
+      position: fixed;
+      box-sizing: border-box;
+      border: 2px solid #a78bfa;
+    }
+    .layer--block {
+      border: 2px dotted #fbbf24;
+    }
+    .chip--layer {
+      border: 0;
+      background: rgba(91, 33, 182, .95);
+      font: inherit;
+      cursor: pointer;
+      pointer-events: auto;
+    }
+    .chip--layer:focus-visible,
     .chip--positioned:focus-visible {
       outline: 2px solid #ffffff;
       outline-offset: 2px;
@@ -424,19 +470,35 @@
 
   const settingsReady = chrome.storage.sync.get('settings')
     .then(({ settings }) => {
-      if (!settings) return;
-      Object.values(TOGGLES).forEach((key) => {
-        if (typeof settings.toggles?.[key] === 'boolean') state[key] = settings.toggles[key];
-      });
-      if (settings.spacingBase > 0) state.spacingBase = settings.spacingBase;
+      if (settings?.spacingBase > 0) state.spacingBase = settings.spacingBase;
     })
     .catch(() => {});
 
+  function currentToggles() {
+    return Object.fromEntries(Object.values(TOGGLES).map((key) => [key, state[key]]));
+  }
+
+  function applyToggles(toggles) {
+    Object.values(TOGGLES).forEach((key) => {
+      state[key] = typeof toggles?.[key] === 'boolean' ? toggles[key] : false;
+    });
+  }
+
+  async function loadToggles(fresh) {
+    if (fresh) {
+      applyToggles(null);
+      send({ type: 'layout-ruler/toggles', toggles: currentToggles() });
+      return;
+    }
+    const response = await chrome.runtime.sendMessage({ type: 'layout-ruler/toggles-get' }).catch(() => null);
+    applyToggles(response?.toggles);
+  }
+
   function saveSettings() {
+    send({ type: 'layout-ruler/toggles', toggles: currentToggles() });
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      const toggles = Object.fromEntries(Object.values(TOGGLES).map((key) => [key, state[key]]));
-      chrome.storage.sync.set({ settings: { toggles, spacingBase: state.spacingBase } }).catch(() => {});
+      chrome.storage.sync.set({ settings: { spacingBase: state.spacingBase } }).catch(() => {});
     }, 500);
   }
 
@@ -649,7 +711,7 @@
   }
 
   function hasOwnLabel(node) {
-    return Boolean(normalise(node.getAttribute('aria-label')) || node.getAttribute('aria-labelledby')?.trim() || normalise(node.getAttribute('title')));
+    return Boolean(normalise(node.getAttribute('aria-label')) || referencedText(node, 'aria-labelledby') || normalise(node.getAttribute('title')));
   }
 
   function roleOf(node) {
@@ -658,7 +720,7 @@
   }
 
   function hiddenFromAT(node) {
-    if (node.closest('[aria-hidden="true"], [hidden]')) return true;
+    if (node.closest('[aria-hidden="true"]')) return true;
     return node.checkVisibility ? !node.checkVisibility({ visibilityProperty: true }) : false;
   }
 
@@ -669,14 +731,14 @@
     return match ? match[1] : '';
   }
 
-  function contentText(node, budget = { elements: 400 }) {
+  function contentText(node, budget = { elements: 400 }, skip = null) {
     let text = pseudoText(node, '::before');
     node.childNodes.forEach((child) => {
       if (child.nodeType === 3) {
         text += child.nodeValue;
         return;
       }
-      if (child.nodeType !== 1 || child === host || budget.elements <= 0) return;
+      if (child.nodeType !== 1 || child === host || child === skip || budget.elements <= 0) return;
       budget.elements -= 1;
       if (hiddenFromAT(child)) return;
       const label = normalise(child.getAttribute('aria-label'));
@@ -685,11 +747,39 @@
       else if (child.tagName === 'IMG' || (child.tagName === 'INPUT' && child.type === 'image')) part = child.getAttribute('alt') || '';
       else if (/^(INPUT|TEXTAREA)$/.test(child.tagName)) part = child.value || '';
       else if (child.tagName === 'SELECT') part = child.selectedOptions?.[0]?.textContent || '';
-      else part = contentText(child, budget);
+      else part = contentText(child, budget, skip);
       const block = !/^inline/.test(getComputedStyle(child).display);
       text += block ? ` ${part} ` : part;
     });
     return normalise(text + pseudoText(node, '::after'));
+  }
+
+  function visuallyHidden(node) {
+    const rect = node.getBoundingClientRect();
+    return rect.width <= 1 && rect.height <= 1;
+  }
+
+  const ICON_GLYPHS = /[\uE000-\uF8FF]/g;
+  const NON_TEXT = /^(IMG|PICTURE|VIDEO|CANVAS|svg|SVG)$/;
+
+  function visibleText(node, budget = { elements: 400 }, skip = null) {
+    let text = pseudoText(node, '::before');
+    node.childNodes.forEach((child) => {
+      if (child.nodeType === 3) {
+        text += child.nodeValue;
+        return;
+      }
+      if (child.nodeType !== 1 || child === host || child === skip || budget.elements <= 0) return;
+      budget.elements -= 1;
+      if (NON_TEXT.test(child.tagName) || hiddenFromAT(child) || visuallyHidden(child)) return;
+      let part;
+      if (child.tagName === 'INPUT' && /^(button|submit|reset)$/.test(child.type)) part = child.value || '';
+      else if (/^(INPUT|TEXTAREA|SELECT)$/.test(child.tagName)) part = '';
+      else part = visibleText(child, budget, skip);
+      const block = !/^inline/.test(getComputedStyle(child).display);
+      text += block ? ` ${part} ` : part;
+    });
+    return normalise((text + pseudoText(node, '::after')).replace(ICON_GLYPHS, ''));
   }
 
   function referencedText(node, attribute) {
@@ -697,7 +787,11 @@
     return normalise(ids.map((id) => {
       const target = document.getElementById(id);
       if (!target) return '';
-      return normalise(target.getAttribute('aria-label')) || contentText(target);
+      const label = normalise(target.getAttribute('aria-label'));
+      if (label) return label;
+      if (target.tagName === 'IMG') return normalise(target.getAttribute('alt'));
+      if (/^(INPUT|TEXTAREA)$/.test(target.tagName)) return normalise(target.value);
+      return contentText(target) || (hiddenFromAT(target) ? normalise(target.textContent) : '');
     }).join(' '));
   }
 
@@ -711,7 +805,7 @@
       if (type === 'image') return { name: node.getAttribute('alt') || '', source: 'alt' };
     }
     if (/^(INPUT|SELECT|TEXTAREA|METER|PROGRESS|OUTPUT)$/.test(tag) && node.labels?.length) {
-      return { name: normalise([...node.labels].map((label) => contentText(label)).join(' ')), source: 'label' };
+      return { name: normalise([...node.labels].map((label) => contentText(label, undefined, node)).join(' ')), source: 'label' };
     }
     if ((tag === 'IMG' || tag === 'AREA') && node.hasAttribute('alt')) return { name: normalise(node.getAttribute('alt')), source: 'alt' };
     if (tag === 'FIELDSET') {
@@ -754,7 +848,30 @@
   }
 
   function isFocusable(node) {
+    if (/^(A|AREA)$/.test(node.tagName) && !node.hasAttribute('href') && !node.hasAttribute('tabindex')) return false;
     return node.tabIndex >= 0 && !node.matches(':disabled') && !node.closest('[inert]');
+  }
+
+  const LABEL_IN_NAME_ROLES = new Set(['button', 'link', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'treeitem', 'summary', 'textbox', 'searchbox', 'combobox', 'listbox', 'slider', 'spinbutton']);
+
+  function comparable(text) {
+    return normalise(text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' '));
+  }
+
+  function visibleLabel(node) {
+    if (node.tagName === 'INPUT' && /^(button|submit|reset)$/.test(node.type)) return normalise(node.value);
+    if (/^(INPUT|SELECT|TEXTAREA)$/.test(node.tagName)) {
+      return normalise([...(node.labels || [])].map((label) => visibleText(label, undefined, node)).join(' '));
+    }
+    return visibleText(node);
+  }
+
+  function labelInNameFlag(node, role, name, source) {
+    if (!LABEL_IN_NAME_ROLES.has(role) || !/^aria-label/.test(source)) return null;
+    const visible = visibleLabel(node);
+    const wanted = comparable(visible);
+    if (!wanted || ` ${comparable(name)} `.includes(` ${wanted} `)) return null;
+    return `Accessible name “${name}” (${source}) does not contain the visible label “${visible}” (2.5.3 Label in Name).`;
   }
 
   function statesOf(node) {
@@ -777,7 +894,7 @@
     const { name, source } = accessibleName(node);
     const description = referencedText(node, 'aria-describedby') || (source !== 'title' ? normalise(node.getAttribute('title')) : '');
     const rect = node.getBoundingClientRect();
-    const interactive = INTERACTIVE_ROLES.has(role) || (isFocusable(node) && node !== document.body);
+    const interactive = INTERACTIVE_ROLES.has(role) || (isFocusable(node) && node !== document.body && node !== document.documentElement);
     const inline = /^inline/.test(getComputedStyle(node).display) && role === 'link';
     const facts = [
       ['role', role === 'heading' ? `heading level ${headingLevel(node)}` : role],
@@ -787,6 +904,8 @@
     if (description) facts.push(['description', `“${description}”`]);
     const states = statesOf(node);
     if (states.length) facts.push(['states', states.join(', ')]);
+    const contrast = contrastFacts(node);
+    facts.push(...contrast);
 
     const flags = [];
     if (interactive) {
@@ -798,17 +917,16 @@
       if (small && !inline) flags.push(`Target ${r1(rect.width)}×${r1(rect.height)} is under 24×24 (2.5.8). Check the spacing exception.`);
       if (!name) flags.push('Interactive element with no accessible name.');
     }
-    const label = normalise(node.getAttribute('aria-label'));
-    const visible = label ? contentText(node) : '';
-    if (visible && !label.toLowerCase().includes(visible.toLowerCase())) {
-      flags.push(`aria-label “${label}” does not contain the visible text “${visible}” (2.5.3 Label in Name).`);
-    }
-    if (node.closest('[aria-hidden="true"]') && (isFocusable(node) || node.querySelector('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'))) {
+    const labelFlag = labelInNameFlag(node, role, name, source);
+    if (labelFlag) flags.push(labelFlag);
+    if (node.closest('[aria-hidden="true"]') && (isFocusable(node) || [...node.querySelectorAll(FOCUSABLE)].some(isFocusable))) {
       flags.push('aria-hidden on a focusable element, or one containing focusable elements.');
     }
     if (node.tabIndex > 0) flags.push(`tabindex=${node.tabIndex} changes the focus order.`);
     if (node.tagName === 'IMG' && !node.hasAttribute('alt')) flags.push('img has no alt attribute.');
     if (role === 'heading' && !name) flags.push('Empty heading.');
+    const ratio = contrast.find(([key]) => key === 'contrast')?.[1] || '';
+    if (/AA fail/.test(ratio)) flags.push(`Text contrast ${ratio.split(' · ')[0]} fails AA (1.4.3).`);
     return { facts, flags, role, name };
   }
 
@@ -819,14 +937,14 @@
   function inRadioTabOrder(node) {
     if (node.type !== 'radio' || !node.name) return true;
     const group = [...(node.form || document).querySelectorAll('input[type="radio"]')]
-      .filter((radio) => radio.name === node.name && !radio.disabled);
+      .filter((radio) => radio.name === node.name && radio.form === node.form && !radio.disabled && radio.checkVisibility({ visibilityProperty: true }));
     const checked = group.find((radio) => radio.checked);
     return checked ? checked === node : group[0] === node;
   }
 
-  function isTabStop(node) {
-    if (node.tabIndex < 0 || node.matches(':disabled') || node.closest('[inert]')) return false;
-    if (host?.contains(node)) return false;
+  function isTabStop(node, modal) {
+    if (!isFocusable(node)) return false;
+    if (host?.contains(node) || (modal && !modal.contains(node))) return false;
     const rect = node.getBoundingClientRect();
     if (!rect.width && !rect.height) return false;
     if (node.checkVisibility && !node.checkVisibility({ visibilityProperty: true })) return false;
@@ -834,7 +952,8 @@
   }
 
   function focusStops() {
-    const nodes = [...document.querySelectorAll(FOCUSABLE)].filter(isTabStop);
+    const modal = [...document.querySelectorAll('dialog:modal')].pop() || null;
+    const nodes = [...document.querySelectorAll(FOCUSABLE)].filter((node) => isTabStop(node, modal));
     const positive = nodes.filter((node) => node.tabIndex > 0).sort((a, b) => a.tabIndex - b.tabIndex);
     return positive.concat(nodes.filter((node) => node.tabIndex === 0)).slice(0, 1000);
   }
@@ -956,8 +1075,18 @@
     return null;
   }
 
-  function overflowCause(node, cs) {
+  function automaticMinWidth(node, cs, rect) {
+    const parent = node.parentElement;
+    if (!parent || cs.minWidth !== 'auto' || !/visible|clip/.test(cs.overflowX)) return false;
+    if (!/(flex|grid)$/.test(getComputedStyle(parent).display)) return false;
+    const box = parent.getBoundingClientRect();
+    return rect.right > box.right + 0.5 || rect.width > parent.clientWidth + 0.5;
+  }
+
+  function overflowCause(node, cs, rect) {
     const causes = [];
+    if (innerWidth > document.documentElement.clientWidth && Math.abs(rect.width - innerWidth) < 1) causes.push('width ≈ 100vw (includes the scrollbar)');
+    if (automaticMinWidth(node, cs, rect)) causes.push('min-width: auto on a flex/grid item (try min-width: 0)');
     if (cs.minWidth !== '0px' && cs.minWidth !== 'auto' && px(cs.minWidth) > 0) causes.push(`min-width ${cs.minWidth}`);
     if (cs.whiteSpace === 'nowrap' || cs.whiteSpace === 'pre') causes.push(cs.whiteSpace);
     if (px(cs.marginRight) < 0) causes.push(`margin-right ${cs.marginRight}`);
@@ -991,7 +1120,7 @@
         const parentOver = parent && (parent.right + scrollX > viewport + 0.5 || parent.left + scrollX < -0.5);
         if (!parentOver && !clippingAncestorX(node)) {
           const amount = right > viewport + 0.5 ? `+${r1(right - viewport)}px →` : `← ${r1(-left)}px`;
-          const causes = overflowCause(node, cs);
+          const causes = overflowCause(node, cs, rect);
           items.push({ node, kind: 'overflow', label: [amount, ...causes].join(' · ') });
         }
       }
@@ -1210,23 +1339,109 @@
     });
   }
 
-  function layoutSummary(cs) {
-    const lines = [`display: ${cs.display}`];
-    if (cs.position !== 'static') lines.push(`position: ${cs.position}`);
+  const GENERIC_FONT = /^(serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-serif|ui-sans-serif|ui-monospace|ui-rounded|math|emoji|fangsong|-apple-system|BlinkMacSystemFont)$/i;
+  const fontCache = new Map();
+  const fontProbe = document.createElement('canvas').getContext('2d');
+  ['loadingdone', 'loadingerror'].forEach((type) => document.fonts?.addEventListener(type, () => fontCache.clear()));
+
+  function fontFamilies(value) {
+    return (value.match(/"[^"]*"|'[^']*'|[^,]+/g) || [])
+      .map((part) => part.trim().replace(/^["']|["']$/g, ''))
+      .filter(Boolean);
+  }
+
+  function weightRange(face) {
+    const [min, max = min] = face.weight.split(/\s+/).map((value) => (value === 'normal' ? 400 : value === 'bold' ? 700 : Number(value)));
+    return [min, max];
+  }
+
+  function installedFont(family) {
+    const sample = 'mmmmmmmmmmlli1WQ@#';
+    return ['monospace', 'serif', 'sans-serif'].some((base) => {
+      fontProbe.font = `72px ${base}`;
+      const fallback = fontProbe.measureText(sample).width;
+      fontProbe.font = `72px "${family}", ${base}`;
+      return fontProbe.measureText(sample).width !== fallback;
+    });
+  }
+
+  function webFontState(faces, weight) {
+    const loaded = faces.filter((face) => face.status === 'loaded');
+    if (loaded.length) {
+      const covered = loaded.some((face) => {
+        const [min, max] = weightRange(face);
+        return weight >= min && weight <= max;
+      });
+      return { used: true, note: covered ? 'web font' : `web font, no ${weight} weight loaded so it is synthesized` };
+    }
+    if (faces.some((face) => face.status === 'error')) return { used: false, note: 'web font failed to load' };
+    if (faces.some((face) => face.status === 'loading')) return { used: false, note: 'web font still loading' };
+    return { used: false, note: 'web font not loaded' };
+  }
+
+  function renderedFont(cs) {
+    const key = `${cs.fontFamily}|${cs.fontWeight}|${cs.fontStyle}`;
+    if (fontCache.has(key)) return fontCache.get(key);
+    const weight = Number(cs.fontWeight) || 400;
+    const faces = [...(document.fonts || [])];
+    const skipped = [];
+    let result = '';
+    for (const family of fontFamilies(cs.fontFamily)) {
+      if (GENERIC_FONT.test(family)) {
+        result = `${family} (browser default)`;
+        break;
+      }
+      const own = faces.filter((face) => face.family.replace(/^["']|["']$/g, '').toLowerCase() === family.toLowerCase());
+      if (own.length) {
+        const { used, note } = webFontState(own, weight);
+        if (used) {
+          result = `${family} (${note})`;
+          break;
+        }
+        skipped.push(`${family}: ${note}`);
+        continue;
+      }
+      if (installedFont(family)) {
+        result = `${family} (installed on this computer)`;
+        break;
+      }
+      skipped.push(`${family}: not installed`);
+    }
+    const text = [result || 'browser default', ...(skipped.length ? [`skipped ${skipped.join(', ')}`] : [])].join(' · ');
+    fontCache.set(key, text);
+    return text;
+  }
+
+  function layoutSummary(cs, node) {
+    const pairs = [['display', cs.display]];
+    if (cs.position !== 'static') pairs.push(['position', cs.position]);
     if (cs.display.includes('grid')) {
-      lines.push(`cols: ${cs.gridTemplateColumns}`);
-      lines.push(`rows: ${cs.gridTemplateRows}`);
-      lines.push(`gap: ${r1(px(cs.rowGap))} / ${r1(px(cs.columnGap))}`);
-      lines.push(`align: ${cs.alignItems} · justify: ${cs.justifyItems}`);
+      pairs.push(
+        ['cols', cs.gridTemplateColumns],
+        ['rows', cs.gridTemplateRows],
+        ['gap', `${r1(px(cs.rowGap))} / ${r1(px(cs.columnGap))}`],
+        ['align', cs.alignItems],
+        ['justify', cs.justifyItems]
+      );
     } else if (cs.display.includes('flex')) {
-      lines.push(`flex-flow: ${cs.flexDirection} ${cs.flexWrap}`);
-      lines.push(`gap: ${r1(px(cs.rowGap))} / ${r1(px(cs.columnGap))}`);
-      lines.push(`justify: ${cs.justifyContent} · align: ${cs.alignItems}`);
+      pairs.push(
+        ['flex-flow', `${cs.flexDirection} ${cs.flexWrap}`],
+        ['gap', `${r1(px(cs.rowGap))} / ${r1(px(cs.columnGap))}`],
+        ['justify', cs.justifyContent],
+        ['align', cs.alignItems]
+      );
     }
     const rem = state.showSpacing ? ` (${remOf(px(cs.fontSize))}rem)` : '';
-    lines.push(`font: ${cs.fontSize}${rem}/${cs.lineHeight} ${cs.fontWeight}`);
-    lines.push(`color: ${hexOf(cs.color)}`);
-    return lines;
+    pairs.push(
+      ['font-family', cs.fontFamily],
+      ['font used', renderedFont(cs)],
+      ['font-size', `${cs.fontSize}${rem}`],
+      ['line-height', cs.lineHeight],
+      ['font-weight', cs.fontWeight],
+      ['color', hexOf(cs.color)]
+    );
+    if (state.showLayers && cs.position !== 'static') pairs.push(...layerPairs(node, cs));
+    return pairs;
   }
 
   function drawTip(node, info) {
@@ -1239,12 +1454,30 @@
     size.textContent = `${r1(rect.width)} × ${r1(rect.height)}`;
     tip.append(name, size);
 
-    const lines = layoutSummary(cs);
-    if (info) lines.push(`${info.role}${info.name ? ` “${info.name.slice(0, 60)}”` : ' · no name'}`);
-    lines.forEach((line) => {
-      const row = el('span', 'tip__row');
-      row.textContent = line;
-      tip.append(row);
+    const pairs = layoutSummary(cs, node);
+    const fact = (key) => info?.facts.find(([name]) => name === key)?.[1];
+    if (info) {
+      pairs.push(
+        ['role', info.role],
+        ['name', info.name ? `“${info.name.slice(0, 60)}”` : '(none)'],
+        ['contrast', fact('contrast')],
+        ['fill', fact('fill')],
+        ['target', fact('target')]
+      );
+    }
+    const list = el('dl', 'tip__facts');
+    pairs.filter(([, value]) => value).forEach(([key, value]) => {
+      const term = el('dt', 'tip__key');
+      term.textContent = key;
+      const detail = el('dd', 'tip__value');
+      detail.textContent = value;
+      list.append(term, detail);
+    });
+    tip.append(list);
+    info?.flags.forEach((flag) => {
+      const issue = el('span', 'tip__issue');
+      issue.textContent = `⚠ ${flag}`;
+      tip.append(issue);
     });
     if (isFrame(node)) {
       const hint = el('span', 'tip__hint');
@@ -1446,6 +1679,39 @@
     return sorted.find((preset) => preset.minWidth <= innerWidth) || sorted[sorted.length - 1];
   }
 
+  const SAFE_AREAS = [
+    { screen: '2560 × 1440', width: 2560, fold: 1305 },
+    { screen: '1920 × 1080', width: 1920, fold: 945 },
+    { screen: '1440 × 900', width: 1440, fold: 790 },
+    { screen: '1536 × 864', width: 1536, fold: 730 },
+    { screen: '1366 × 768', width: 1366, fold: 657 }
+  ];
+
+  function safeAreaFor(width) {
+    if (width < 1024) return null;
+    return SAFE_AREAS.reduce((best, area) => (Math.abs(area.width - width) < Math.abs(best.width - width) ? area : best));
+  }
+
+  function viewportText() {
+    const safe = safeAreaFor(innerWidth);
+    const parts = [`viewport ${innerWidth} × ${innerHeight}`];
+    if (safe) parts.push(`safe area ≈ ${safe.width} × ${safe.fold} (${safe.screen} screen)`);
+    return parts.join(' · ');
+  }
+
+  function drawSafeAreas() {
+    if (!state.showSafeAreas) return;
+    const current = safeAreaFor(innerWidth);
+    SAFE_AREAS.forEach((area) => {
+      const top = area.fold - scrollY;
+      if (top < 0 || top > innerHeight) return;
+      layers.grid.append(el('div', 'fold__shade', { top: `${top}px` }));
+      layers.grid.append(el('div', 'fold', { top: `${top}px` }));
+      const label = `${area.screen} screen · fold ≈ ${area.fold}px${area === current ? ' · closest to this width' : ''}`;
+      chip(label, innerWidth - 12, top - 12, 'fold', { transform: 'translate(-100%, -50%)' });
+    });
+  }
+
   function drawLayoutGrid() {
     if (!state.showGrid) return;
     const preset = activePreset();
@@ -1461,7 +1727,7 @@
       const node = el('div', 'gridcol', { left: `${left + index * (column + gutter)}px`, width: `${column}px` });
       layers.grid.append(node);
     }
-    const label = chip(`${innerWidth} × ${innerHeight} · ${preset.name} ≥${preset.minWidth} · ${columns} cols · col ${r1(column)}`, width / 2, 8, 'viewport', { transform: 'translateX(-50%)' });
+    const label = chip(`${viewportText()} · ${preset.name} ≥${preset.minWidth} · ${columns} cols · col ${r1(column)}`, width / 2, 8, 'viewport', { transform: 'translateX(-50%)' });
     layers.grid.append(label);
   }
 
@@ -1743,19 +2009,46 @@
     return /dark/.test(scheme) && !/light/.test(scheme) ? [18, 18, 18, 1] : [255, 255, 255, 1];
   }
 
-  function backdrop(node) {
-    const stack = paintStack(node);
-    const found = [];
+  const MEDIA = /^(IMG|PICTURE|VIDEO|CANVAS|IFRAME|OBJECT|EMBED|svg|SVG)$/;
+
+  function backgroundLayers(node, stack = paintStack(node)) {
+    const layers = [];
     let image = false;
     for (const current of stack || ancestors(node)) {
       const cs = getComputedStyle(current);
-      if (cs.backgroundImage !== 'none') image = true;
+      if (cs.backgroundImage !== 'none' || (current !== node && MEDIA.test(current.tagName))) image = true;
       const color = rgba(cs.backgroundColor);
-      if (color[3] > 0) found.push(color);
-      if (color[3] === 1) break;
+      if (color[3] > 0) layers.push({ el: current, color });
+      if (color[3] === 1 && groupOpacity(current) === 1) break;
     }
-    const color = found.reduceRight((under, layer) => over(layer, under), pageBase());
-    return { color, image, sampled: stack ? 'paint stack' : 'ancestors' };
+    return { layers: layers.reverse(), image, sampled: stack ? 'paint stack' : 'ancestors' };
+  }
+
+  function outermostGroup(el, scope) {
+    let group = null;
+    for (let current = el; current && current !== scope; current = current.parentElement) {
+      if (parseFloat(getComputedStyle(current).opacity) < 1) group = current;
+    }
+    return group;
+  }
+
+  function compose(layers, backdropColor, scope = null) {
+    let color = backdropColor;
+    let i = 0;
+    while (i < layers.length) {
+      const group = outermostGroup(layers[i].el, scope);
+      if (!group) {
+        color = over(layers[i].color, color);
+        i += 1;
+        continue;
+      }
+      let j = i;
+      while (j < layers.length && group.contains(layers[j].el)) j += 1;
+      const inner = compose(layers.slice(i, j), color, group);
+      color = over([...inner.slice(0, 3), parseFloat(getComputedStyle(group).opacity)], color);
+      i = j;
+    }
+    return color;
   }
 
   function groupOpacity(node) {
@@ -1793,16 +2086,43 @@
     });
   }
 
-  function contrastFacts(node) {
-    const isControl = /^(INPUT|BUTTON|TEXTAREA|SELECT)$/.test(node.tagName);
-    const hasText = [...node.childNodes].some((child) => child.nodeType === 3 && child.nodeValue.trim());
-    if (!hasText && !isControl) return [];
+  function hasOwnText(node) {
+    return [...node.childNodes].some((child) => child.nodeType === 3 && child.nodeValue.trim());
+  }
+
+  const CONTROLS = 'a[href], button, summary, input, select, textarea, [role="button"], [role="link"], [role="tab"], [role="menuitem"]';
+
+  function textHost(node) {
+    if (hasOwnText(node) || /^(INPUT|TEXTAREA|SELECT)$/.test(node.tagName)) return node;
+    if (!node.matches(CONTROLS)) return null;
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, {
+      acceptNode: (text) => (text.nodeValue.trim() && !hiddenFromAT(text.parentElement) && !visuallyHidden(text.parentElement)
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_SKIP)
+    });
+    return walker.nextNode()?.parentElement || (node.tagName === 'BUTTON' ? node : null);
+  }
+
+  function surroundFacts(node) {
+    const own = rgba(getComputedStyle(node).backgroundColor);
+    if (own[3] === 0 || !node.parentElement) return [];
+    const base = pageBase();
+    const fill = compose(backgroundLayers(node, ancestors(node)).layers, base);
+    const around = compose(backgroundLayers(node.parentElement, ancestors(node.parentElement)).layers, base);
+    const [light, dark] = [luminance(fill), luminance(around)].sort((a, b) => b - a);
+    const ratio = (light + 0.05) / (dark + 0.05);
+    return [['fill', `${toHex(fill)} vs ${toHex(around)} around · ${(Math.floor(ratio * 100) / 100).toFixed(2)}:1 (1.4.11, the label usually identifies the control)`]];
+  }
+
+  function contrastFacts(target) {
+    const node = textHost(target);
+    if (!node) return [];
 
     const cs = getComputedStyle(node);
-    const { color: background, image } = backdrop(node);
-    const text = rgba(cs.color);
-    text[3] *= groupOpacity(node);
-    const ink = over(text, background);
+    const { layers, image, sampled } = backgroundLayers(node);
+    const base = pageBase();
+    const background = compose(layers, base);
+    const ink = compose(layers.concat({ el: node, color: rgba(cs.color) }), base);
     const [light, dark] = [luminance(ink), luminance(background)].sort((a, b) => b - a);
     const ratio = (light + 0.05) / (dark + 0.05);
     const size = px(cs.fontSize);
@@ -1814,10 +2134,15 @@
       `AAA ${grade(large ? 4.5 : 7)}`
     ];
     if (large) notes.push('large text');
-    if (image) notes.push('over an image, verify');
+    if (image) notes.push('over an image or gradient, verify');
+    if (sampled === 'ancestors') notes.push('background from ancestors only, verify');
     if (pseudoBackground(node)) notes.push('::before/::after background not sampled');
 
-    return [['text', toHex(ink)], ['background', toHex(background)], ['contrast', notes.join(' · ')]];
+    const facts = [['text', toHex(ink)], ['background', toHex(background)], ['contrast', notes.join(' · ')]];
+    if (node !== target) facts.unshift(['text in', describe(node)]);
+    const control = target.closest(CONTROLS);
+    if (control) facts.push(...surroundFacts(control));
+    return facts;
   }
 
   /* ---------- absolute / fixed elements ---------- */
@@ -1829,7 +2154,7 @@
       positioned.pending = true;
       idle(() => {
         const list = [...document.querySelectorAll('*')]
-          .filter((node) => node !== host && node !== designHost && /^(absolute|fixed)$/.test(getComputedStyle(node).position))
+          .filter((node) => node !== host && node !== designHost && isLayer(getComputedStyle(node)))
           .slice(0, 500);
         const changed = list.length !== positioned.list.length || list.some((node, index) => node !== positioned.list[index]);
         positioned.list = list;
@@ -1841,12 +2166,139 @@
     return positioned.list;
   }
 
-  function positionedWithin(node) {
+  function isLayer(cs) {
+    return /^(absolute|fixed|sticky)$/.test(cs.position) || (cs.position === 'relative' && cs.zIndex !== 'auto');
+  }
+
+  function layersWithin(node) {
     const area = node.getBoundingClientRect();
     return allPositioned()
       .filter((child) => child !== node && child.isConnected && !child.contains(node))
-      .filter((child) => node.contains(child) || overlap(area, child.getBoundingClientRect()) > 0)
+      .filter((child) => node.contains(child) || overlap(area, child.getBoundingClientRect()) > 0);
+  }
+
+  function positionedWithin(node) {
+    return layersWithin(node)
+      .filter((child) => /^(absolute|fixed)$/.test(getComputedStyle(child).position))
       .slice(0, 40);
+  }
+
+  function createsContext(node, cs) {
+    if (node === document.documentElement) return true;
+    if (/^(fixed|sticky)$/.test(cs.position)) return true;
+    if (cs.zIndex !== 'auto' && (cs.position !== 'static' || /(flex|grid)$/.test(getComputedStyle(node.parentElement || node).display))) return true;
+    if (parseFloat(cs.opacity) < 1 || cs.isolation === 'isolate' || cs.mixBlendMode !== 'normal') return true;
+    if ([cs.transform, cs.filter, cs.perspective, cs.clipPath, cs.mask, cs.backdropFilter].some((value) => value && value !== 'none')) return true;
+    if (/layout|paint|strict|content/.test(cs.contain) || /size/.test(cs.containerType)) return true;
+    return /transform|opacity|filter|perspective|isolation|z-index/.test(cs.willChange);
+  }
+
+  function contextPath(node) {
+    const path = [node];
+    for (let current = node.parentElement; current; current = current.parentElement) {
+      if (createsContext(current, getComputedStyle(current))) path.push(current);
+    }
+    return path;
+  }
+
+  function zKey(node) {
+    const z = parseInt(getComputedStyle(node).zIndex, 10);
+    return Number.isNaN(z) ? 0 : z;
+  }
+
+  function frontFirst(a, b) {
+    if (a.contains(b)) return 1;
+    if (b.contains(a)) return -1;
+    const pathA = contextPath(a);
+    const pathB = contextPath(b);
+    const indexA = pathA.findIndex((item, index) => index > 0 && pathB.indexOf(item) > 0);
+    const common = pathA[indexA];
+    const childA = indexA > 0 ? pathA[indexA - 1] : a;
+    const childB = common ? pathB[pathB.indexOf(common) - 1] : b;
+    const difference = zKey(childB) - zKey(childA);
+    if (difference) return difference;
+    return childA.compareDocumentPosition(childB) & Node.DOCUMENT_POSITION_FOLLOWING ? 1 : -1;
+  }
+
+  function containingBlock(node, cs) {
+    if (cs.position === 'relative' || cs.position === 'sticky') return node.parentElement;
+    for (let current = node.parentElement; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (cs.position === 'absolute' && style.position !== 'static') return current;
+      if ([style.transform, style.filter, style.perspective].some((value) => value && value !== 'none')) return current;
+      if (/layout|paint|strict|content/.test(style.contain) || /transform|filter|perspective/.test(style.willChange)) return current;
+    }
+    return null;
+  }
+
+  function insetText(node) {
+    const map = node.computedStyleMap?.();
+    const sides = ['top', 'right', 'bottom', 'left']
+      .map((side) => [side, map ? String(map.get(side)) : getComputedStyle(node)[side]])
+      .filter(([, value]) => value !== 'auto');
+    return sides.length ? sides.map(([side, value]) => `${side} ${value}`).join(' · ') : 'auto';
+  }
+
+  function layerPairs(node, cs) {
+    const block = containingBlock(node, cs);
+    const context = contextPath(node).find((item) => item !== node);
+    return [
+      ['position', cs.position],
+      ['z-index', cs.zIndex],
+      ['inset', insetText(node)],
+      ['relative to', block ? describe(block) : 'viewport'],
+      ['stacking in', context ? describe(context) : 'root'],
+      ['own context', createsContext(node, cs) ? 'yes' : 'no']
+    ];
+  }
+
+  function layerList(node) {
+    const list = layersWithin(node).slice(0, 40);
+    if (isLayer(getComputedStyle(node))) list.push(node);
+    return list.sort(frontFirst);
+  }
+
+  function drawLayers(node) {
+    const list = layerList(node);
+    const own = getComputedStyle(node);
+    if (own.position !== 'static') {
+      const block = containingBlock(node, own);
+      if (block) {
+        const frame = el('div', 'layer layer--block');
+        place(frame, block.getBoundingClientRect());
+        layers.layout.append(frame);
+        chip('containing block', block.getBoundingClientRect().left, Math.max(block.getBoundingClientRect().bottom + 9, 9), 'block', { transform: 'translateY(-50%)', background: '#92400e', color: '#ffffff' });
+      }
+    }
+    list.forEach((child) => {
+      const rect = child.getBoundingClientRect();
+      if (!rect.width && !rect.height) return;
+      const frame = el('div', 'layer');
+      place(frame, rect);
+      layers.layout.append(frame);
+      const label = `z ${getComputedStyle(child).zIndex}`;
+      const target = el('button', 'chip chip--layer', { left: `${rect.right}px`, top: `${rect.top}px`, transform: 'translate(-100%, -100%)' });
+      target.type = 'button';
+      target.textContent = label;
+      target.setAttribute('aria-label', `Inspect ${describe(child)}, z-index ${getComputedStyle(child).zIndex}`);
+      target.addEventListener('click', () => lockOn(child));
+      layers.labels.append(target);
+    });
+    state.layerItems = list;
+  }
+
+  function layerSlice(node) {
+    return layerList(node).map((child, index) => {
+      const cs = getComputedStyle(child);
+      const rect = child.getBoundingClientRect();
+      return {
+        index,
+        z: cs.zIndex,
+        name: describe(child),
+        current: child === node,
+        facts: [...layerPairs(child, cs), ['size', `${r1(rect.width)} × ${r1(rect.height)}`]]
+      };
+    });
   }
 
   function lockOn(node) {
@@ -1910,7 +2362,7 @@
     const { rect, cs, margin, padding, border } = metrics(node);
     const size = `${r1(rect.width)} × ${r1(rect.height)}`;
     const rem = state.showSpacing ? ` (${remOf(rect.width)} × ${remOf(rect.height)}rem)` : '';
-    const font = state.showSpacing ? `${cs.fontSize} (${remOf(px(cs.fontSize))}rem) / ${cs.lineHeight}` : `${cs.fontSize} / ${cs.lineHeight}`;
+    const fontSize = state.showSpacing ? `${cs.fontSize} (${remOf(px(cs.fontSize))}rem)` : cs.fontSize;
     return [
       ['size', `${size}${rem}`],
       ['offset', `${r1(rect.left)}, ${r1(rect.top)}`],
@@ -1919,10 +2371,13 @@
       ['padding', sideText(sides(padding))],
       ['display', cs.display],
       ['gap', `${r1(px(cs.rowGap))} / ${r1(px(cs.columnGap))}`],
-      ['font', font],
+      ['font-family', cs.fontFamily],
+      ['font used', renderedFont(cs)],
+      ['font-size', fontSize],
+      ['line-height', cs.lineHeight],
+      ['font-weight', cs.fontWeight],
       ...offScaleFact(margin, padding, cs),
-      ...positionedFact(node),
-      ...(state.showContrast ? contrastFacts(node) : [])
+      ...positionedFact(node)
     ];
   }
 
@@ -1930,10 +2385,8 @@
     if (!node || !node.isConnected) return '';
     const lines = [describe(node)];
     const entries = factsFor(node);
-    if (state.showA11y) {
-      const info = accessibility(node);
-      entries.push(...info.facts, ...info.flags.map((flag) => ['issue', flag]));
-    }
+    const info = accessibility(node);
+    entries.push(...info.facts, ...info.flags.map((flag) => ['issue', flag]));
     entries.forEach(([key, value]) => {
       lines.push(`${key.padEnd(8, ' ')}${value}`);
     });
@@ -2064,7 +2517,7 @@
 
       const link = document.createElement('a');
       link.href = await stamp(dataUrl);
-      link.download = `layout-ruler-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.png`;
+      link.download = `fe-inspector-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.png`;
       link.click();
       toast('PNG exported');
     }));
@@ -2124,14 +2577,14 @@
     const hovered = state.hovered && state.hovered.isConnected ? state.hovered : null;
     const hoveredRect = hovered ? hovered.getBoundingClientRect() : null;
     const signed = (value) => `${value >= 0 ? '+' : ''}${r1(value)}`;
-    const info = a11y !== undefined ? a11y : hovered && state.showA11y ? accessibility(hovered) : null;
+    const info = a11y !== undefined ? a11y : hovered ? accessibility(hovered) : null;
     const preset = state.showGrid ? activePreset() : null;
     const outline = state.showHeadings ? maps.headings.items : null;
     const overflow = state.showOverflow ? maps.overflow.items : null;
     const indexed = (items, kind) => (items || []).map((item, index) => ({ ...item, index })).filter((item) => item.kind === kind);
 
     return {
-      viewport: `${innerWidth} × ${innerHeight}${preset ? ` · ${preset.name}` : ''}`,
+      viewport: `${viewportText()}${preset ? ` · ${preset.name}` : ''}`,
       child: state.claimed,
       toggles: {
         layout: state.showLayout,
@@ -2139,12 +2592,13 @@
         'grid-ruler': state.showGridRuler,
         'layout-grid': state.showGrid,
         design: state.showDesign,
-        contrast: state.showContrast,
-        a11y: state.showA11y,
         headings: state.showHeadings,
         'focus-map': state.showFocusMap,
         overflow: state.showOverflow,
         spacing: state.showSpacing,
+        layers: state.showLayers,
+        viewport: state.showViewport,
+        'safe-areas': state.showSafeAreas,
         'copy-on-click': state.copyOnClick
       },
       hovered: hovered ? {
@@ -2155,6 +2609,8 @@
         flags: info?.flags || [],
         frame: isFrame(hovered)
       } : null,
+      layers: state.showLayers && hovered ? layerSlice(hovered) : null,
+      viewportSizes: state.showViewport ? { width: innerWidth, height: innerHeight, custom: state.viewportSize } : null,
       overflow: state.showOverflow ? {
         summary: overflowSummary(),
         scanning: !overflow,
@@ -2212,6 +2668,7 @@
     Object.values(layers).forEach(clear);
     drawGridRuler();
     drawLayoutGrid();
+    drawSafeAreas();
     drawPins();
 
     const hovered = state.hovered && state.hovered.isConnected ? state.hovered : null;
@@ -2220,8 +2677,9 @@
       spacingLabels(hovered);
       if (state.showLayout) {
         drawLayout(hovered);
-        drawPositioned(hovered);
+        if (!state.showLayers) drawPositioned(hovered);
       }
+      if (state.showLayers) drawLayers(hovered);
     }
 
     if (state.showLayout && hovered) {
@@ -2236,7 +2694,7 @@
     refreshMaps(true);
     placeDesign();
 
-    const info = hovered && state.showA11y ? accessibility(hovered) : null;
+    const info = hovered ? accessibility(hovered) : null;
     if (hovered) drawTip(hovered, info);
     const snap = snapshot(info);
     if (!state.poppedOut) Panel.render(panelBody, snap, { mode: 'page', level: 2 });
@@ -2400,14 +2858,33 @@
   /* ---------- actions ---------- */
 
   function reveal(index, kind) {
-    const node = (kind === 'overflow' ? maps.overflow : maps.headings).items?.[index]?.node;
+    const node = kind === 'layer'
+      ? state.layerItems?.[index]
+      : (kind === 'overflow' ? maps.overflow : maps.headings).items?.[index]?.node;
     if (!node?.isConnected) return;
     node.scrollIntoView({ block: 'center', inline: 'nearest' });
     lockOn(node);
   }
 
+  async function resizeViewport(width, height) {
+    if (!(width >= 200 && height >= 200)) return;
+    state.viewportSize = { width, height };
+    toast(`Resizing to ${width} × ${height}…`);
+    const response = await chrome.runtime.sendMessage({ type: 'layout-ruler/viewport', width, height }).catch((error) => ({ error: String(error) }));
+    if (response?.error) toast('Could not resize the window');
+  }
+
+  async function restoreViewport() {
+    await chrome.runtime.sendMessage({ type: 'layout-ruler/viewport', restore: true }).catch(() => {});
+  }
+
   function setField(field, value) {
     const [group, key] = String(field).split('.');
+    if (group === 'viewport' && (key === 'width' || key === 'height')) {
+      const next = { ...state.viewportSize, [key]: value };
+      resizeViewport(next.width, next.height);
+      return;
+    }
     if (group === 'grid') setGridField(key, value);
     else if (group === 'design') setDesignField(key, value);
     else if (group === 'spacing' && key === 'base' && value > 0) {
@@ -2449,6 +2926,10 @@
     else if (action === 'popin') setPoppedOut(false);
     else if (action === 'reveal') reveal(Number(index), value);
     else if (action === 'set') setField(index, value);
+    else if (action === 'viewport-size') {
+      const [width, height] = String(value).split('x').map(Number);
+      resizeViewport(width, height);
+    } else if (action === 'viewport-restore') restoreViewport();
     else if (action === 'grid-reset') {
       state.presets = DEFAULT_PRESETS.map((preset) => ({ ...preset }));
       chrome.storage.local.remove(gridKey()).catch(() => {});
@@ -2521,11 +3002,11 @@
     invalidate();
   }
 
-  async function activate() {
+  async function activate(fresh = false) {
     if (state.active) return;
     state.active = true;
     building ||= build();
-    await Promise.all([building, settingsReady, loadPresets()]);
+    await Promise.all([building, settingsReady, loadPresets(), loadToggles(fresh)]);
     if (!state.active) return;
     if (!host.isConnected) document.documentElement.append(designHost, host);
     host.hidden = false;
@@ -2579,7 +3060,7 @@
     const type = message?.type;
     if (type === 'layout-ruler/toggle') {
       if (state.active) close();
-      else activate();
+      else activate(true);
       sendResponse({ active: state.active });
       return false;
     }

@@ -11,24 +11,42 @@ globalThis.LayoutRulerPanel = (() => {
   };
 
   const TOGGLE_GROUPS = [
-    ['Overlays', [
+    ['Layout', [
       ['layout', 'grid / flex + distances'],
-      ['ruler', 'ruler', ICONS.ruler],
-      ['grid-ruler', 'grid ruler'],
-      ['layout-grid', 'layout grid'],
-      ['design', 'pixel perfect image']
-    ]],
-    ['Checks', [
-      ['contrast', 'contrast'],
-      ['a11y', 'a11y'],
-      ['headings', 'headings'],
-      ['focus-map', 'focus map'],
       ['overflow', 'overflow'],
-      ['spacing', 'spacing scale']
+      ['spacing', 'spacing scale'],
+      ['layers', 'layers / z-index'],
+      ['viewport', 'viewport sizes']
+    ]],
+    ['Measure', [
+      ['ruler', 'ruler', ICONS.ruler],
+      ['grid-ruler', 'grid ruler']
+    ]],
+    ['Design', [
+      ['layout-grid', 'layout grid'],
+      ['design', 'pixel perfect image'],
+      ['safe-areas', 'desktop safe areas']
+    ]],
+    ['Accessibility', [
+      ['headings', 'headings'],
+      ['focus-map', 'focus map']
     ]],
     ['Behaviour', [
       ['copy-on-click', 'click copies class']
     ]]
+  ];
+
+  const VIEWPORTS = [
+    ['Mobile S', 320, 568],
+    ['Mobile', 375, 667],
+    ['Mobile L', 390, 844],
+    ['Mobile XL', 430, 932],
+    ['Tablet', 768, 1024],
+    ['Tablet landscape', 1024, 768],
+    ['Laptop', 1280, 800],
+    ['Laptop L', 1366, 768],
+    ['Desktop', 1440, 900],
+    ['Full HD', 1920, 1080]
   ];
 
   const KEYS = [
@@ -42,12 +60,13 @@ globalThis.LayoutRulerPanel = (() => {
     ['L', 'grid / flex + distances'],
     ['G', 'layout grid'],
     ['P', 'pixel perfect image'],
-    ['A', 'contrast'],
-    ['I', 'a11y'],
     ['H', 'headings'],
     ['T', 'focus map'],
     ['O', 'overflow'],
     ['S', 'spacing scale'],
+    ['Z', 'layers / z-index'],
+    ['V', 'viewport sizes'],
+    ['A', 'desktop safe areas'],
     ['N', 'navigate'],
     ['Enter', 'inspect iframe'],
     ['Esc', 'exit']
@@ -62,16 +81,17 @@ globalThis.LayoutRulerPanel = (() => {
     l: 'layout',
     g: 'layout-grid',
     p: 'design',
-    a: 'contrast',
-    i: 'a11y',
     h: 'headings',
     t: 'focus-map',
     o: 'overflow',
     s: 'spacing',
+    z: 'layers',
+    v: 'viewport',
+    a: 'safe-areas',
     n: 'copy-on-click'
   };
 
-  const SECTIONS = ['head', 'toggles', 'hovered', 'overflow', 'outline', 'grid', 'design', 'spacing', 'ruler', 'frozen', 'keys'];
+  const SECTIONS = ['head', 'toggles', 'viewportSizes', 'hovered', 'layers', 'overflow', 'outline', 'grid', 'design', 'spacing', 'ruler', 'frozen', 'keys'];
   const TYPING = /^(text|search|number|email|url|tel|password|range)$/;
 
   function el(tag, className, text) {
@@ -188,7 +208,7 @@ globalThis.LayoutRulerPanel = (() => {
         ? [button('panel__close', 'popin', '', { icon: ICONS.popin, ariaLabel: 'Put the panel back in the page' })]
         : [
             button('panel__close', 'popout', '', { icon: ICONS.popout, ariaLabel: 'Move the panel to its own window' }),
-            button('panel__close', 'close', '', { icon: ICONS.close, ariaLabel: 'Close the layout inspector' })
+            button('panel__close', 'close', '', { icon: ICONS.close, ariaLabel: 'Close FE Inspector' })
           ];
       head.append(title, ...buttons);
       const nodes = [head];
@@ -236,6 +256,48 @@ globalThis.LayoutRulerPanel = (() => {
         button('btn btn--primary', 'copy-element', 'Copy element', { icon: ICONS.copy }),
         button('btn', 'export', 'Export PNG', { icon: ICONS.download })
       ));
+      return [node];
+    },
+
+    viewportSizes(slice, options) {
+      if (!slice) return [];
+      const node = section(options, `Viewport · ${slice.width} × ${slice.height}`);
+      const sizes = el('div', 'panel__row');
+      VIEWPORTS.forEach(([name, width, height]) => {
+        sizes.append(button('btn', 'viewport-size', `${name} ${width} × ${height}`, {
+          value: `${width}x${height}`,
+          pressed: slice.width === width && slice.height === height
+        }));
+      });
+      const fields = el('div', 'fields');
+      fields.append(
+        numberField('Width px', 'viewport.width', slice.custom.width, { min: 200 }),
+        numberField('Height px', 'viewport.height', slice.custom.height, { min: 200 })
+      );
+      node.append(
+        el('p', 'panel__empty', 'Moves this tab into a window whose page area is exactly that size. The width is the one media queries see.'),
+        sizes,
+        fields,
+        row(button('btn', 'viewport-restore', 'Back to the normal window', { icon: ICONS.back }))
+      );
+      return [node];
+    },
+
+    layers(slice, options) {
+      if (!slice) return [];
+      const node = section(options, `Layers · ${slice.length}`);
+      if (!slice.length) {
+        node.append(empty('No positioned or z-indexed elements here.'));
+        return [node];
+      }
+      node.append(el('p', 'pins__meta', 'Front to back: the top row is painted on top.'));
+      node.append(list(slice, (item) => {
+        const entry = el('li');
+        const pick = button('pick', 'reveal', '', { index: item.index, value: 'layer' });
+        pick.append(el('span', 'pick__tag', `z ${item.z}`), el('span', 'pick__name', item.current ? `${item.name} (hovered)` : item.name));
+        entry.append(pick, facts(item.facts));
+        return entry;
+      }));
       return [node];
     },
 
@@ -441,7 +503,9 @@ globalThis.LayoutRulerPanel = (() => {
     return {
       head: { viewport: snapshot.viewport, child: snapshot.child, mode: options.mode },
       toggles: snapshot.toggles,
+      viewportSizes: snapshot.viewportSizes,
       hovered: snapshot.hovered,
+      layers: snapshot.layers,
       overflow: snapshot.overflow,
       outline: snapshot.outline,
       grid: snapshot.grid,

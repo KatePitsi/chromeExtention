@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FE Inspector",
-  "version": "1.23.0",
+  "version": "1.35.0",
   "minimum_chrome_version": "130",
   "author": "Catherine Pitsigavdaki",
   "description": "Hover any element to inspect size, spacing, grid, flex, colour contrast and accessibility. Freeze elements to compare them.",

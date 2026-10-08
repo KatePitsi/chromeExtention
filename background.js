@@ -34,6 +34,7 @@ async function sendToActive(tabId, message) {
 }
 
 const activeKey = (tabId) => `active:${tabId}`;
+const togglesKey = (tabId) => `toggles:${tabId}`;
 
 async function setTabActive(tabId, active) {
   if (active) await chrome.storage.session.set({ [activeKey(tabId)]: true });
@@ -70,7 +71,7 @@ async function forgetTab(tabId) {
   const pickerKey = `picker:${tabId}`;
   const stored = await chrome.storage.session.get(pickerKey);
   if (stored[pickerKey]) await chrome.storage.local.remove(stored[pickerKey]);
-  await chrome.storage.session.remove([pickerKey, `frames:${tabId}`, activeKey(tabId)]);
+  await chrome.storage.session.remove([pickerKey, `frames:${tabId}`, activeKey(tabId), togglesKey(tabId), viewportKey(tabId)]);
 }
 
 async function flash(tabId, text) {
@@ -182,6 +183,57 @@ chrome.commands.onCommand.addListener(async (command) => {
   await toggle(tab);
 });
 
+const viewportKey = (tabId) => `viewport:${tabId}`;
+const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+async function innerSize(tabId) {
+  const [result] = await chrome.scripting.executeScript({ target: { tabId }, func: () => [innerWidth, innerHeight] });
+  return result.result;
+}
+
+async function fitViewport(tabId, windowId, width, height) {
+  const zoom = await chrome.tabs.getZoom(tabId).catch(() => 1);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await wait(150);
+    const [innerWidth, innerHeight] = await innerSize(tabId);
+    if (innerWidth === width && innerHeight === height) return;
+    const current = await chrome.windows.get(windowId);
+    await chrome.windows.update(windowId, {
+      width: Math.round(current.width + (width - innerWidth) * zoom),
+      height: Math.round(current.height + (height - innerHeight) * zoom)
+    });
+  }
+}
+
+async function setViewport(tab, width, height) {
+  const key = viewportKey(tab.id);
+  const stored = (await chrome.storage.session.get(key))[key];
+  let windowId = stored?.windowId;
+  if (windowId !== undefined && windowId === tab.windowId) {
+    await chrome.windows.update(windowId, { state: 'normal', width, height });
+  } else {
+    const popup = await chrome.windows.create({ tabId: tab.id, type: 'popup', width, height, focused: true });
+    windowId = popup.id;
+    await chrome.storage.session.set({ [key]: { windowId, fromWindowId: tab.windowId, index: tab.index } });
+  }
+  await fitViewport(tab.id, windowId, width, height);
+}
+
+async function restoreViewport(tab) {
+  const key = viewportKey(tab.id);
+  const stored = (await chrome.storage.session.get(key))[key];
+  if (!stored) return;
+  await chrome.storage.session.remove(key);
+  try {
+    await chrome.windows.get(stored.fromWindowId);
+    await chrome.tabs.move(tab.id, { windowId: stored.fromWindowId, index: stored.index });
+    await chrome.tabs.update(tab.id, { active: true });
+    await chrome.windows.update(stored.fromWindowId, { focused: true });
+  } catch (error) {
+    await chrome.windows.create({ tabId: tab.id, type: 'normal', state: 'maximized' });
+  }
+}
+
 chrome.windows.onRemoved.addListener(async (windowId) => {
   for (const [tabId, id] of await popouts()) {
     if (id !== windowId) continue;
@@ -243,9 +295,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (type === 'layout-ruler/toggles' && tabId) {
+    chrome.storage.session.set({ [togglesKey(tabId)]: message.toggles });
+    return false;
+  }
+
+  if (type === 'layout-ruler/viewport' && tabId) {
+    const job = message.restore ? restoreViewport(sender.tab) : setViewport(sender.tab, message.width, message.height);
+    job.then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ error: String(error) }));
+    return true;
+  }
+
+  if (type === 'layout-ruler/toggles-get' && tabId) {
+    chrome.storage.session.get(togglesKey(tabId)).then((stored) => sendResponse({ toggles: stored[togglesKey(tabId)] || null }));
+    return true;
+  }
+
   if (type === 'layout-ruler/closed' && tabId) {
     setFrameStack(tabId, [0]);
     setTabActive(tabId, false);
+    chrome.storage.session.remove(togglesKey(tabId));
     return false;
   }
 
