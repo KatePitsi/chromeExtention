@@ -15,6 +15,7 @@ globalThis.LayoutRulerPanel = (() => {
       ['layout', 'grid / flex + distances'],
       ['overflow', 'overflow'],
       ['spacing', 'spacing scale'],
+      ['sections', 'section spacing'],
       ['layers', 'layers / z-index'],
       ['viewport', 'viewport sizes']
     ]],
@@ -64,6 +65,7 @@ globalThis.LayoutRulerPanel = (() => {
     ['T', 'focus map'],
     ['O', 'overflow'],
     ['S', 'spacing scale'],
+    ['M', 'section spacing'],
     ['Z', 'layers / z-index'],
     ['V', 'viewport sizes'],
     ['A', 'desktop safe areas'],
@@ -85,13 +87,14 @@ globalThis.LayoutRulerPanel = (() => {
     t: 'focus-map',
     o: 'overflow',
     s: 'spacing',
+    m: 'sections',
     z: 'layers',
     v: 'viewport',
     a: 'safe-areas',
     n: 'copy-on-click'
   };
 
-  const SECTIONS = ['head', 'toggles', 'viewportSizes', 'hovered', 'layers', 'overflow', 'outline', 'grid', 'design', 'spacing', 'ruler', 'frozen', 'keys'];
+  const SECTIONS = ['head', 'toggles', 'viewportSizes', 'hovered', 'layers', 'sections', 'overflow', 'outline', 'grid', 'design', 'spacing', 'ruler', 'frozen', 'keys'];
   const TYPING = /^(text|search|number|email|url|tel|password|range)$/;
 
   function el(tag, className, text) {
@@ -280,6 +283,24 @@ globalThis.LayoutRulerPanel = (() => {
         fields,
         row(button('btn', 'viewport-restore', 'Back to the normal window', { icon: ICONS.back }))
       );
+      return [node];
+    },
+
+    sections(slice, options) {
+      if (!slice) return [];
+      const node = section(options, `Section spacing · ${slice.items.length}`);
+      if (!slice.items.length) {
+        node.append(empty('No stacked sections found in main or body.'));
+        return [node];
+      }
+      node.append(el('p', 'pins__meta', `Content to content. ${slice.summary}`));
+      node.append(list(slice.items, (item) => {
+        const entry = el('li');
+        const pick = button('pick', 'reveal', '', { index: item.index, value: 'section' });
+        pick.append(el('span', 'pick__tag', item.label.split(' · ')[0]), el('span', 'pick__name', item.name), el('span', 'pick__meta', item.label));
+        entry.append(pick);
+        return entry;
+      }));
       return [node];
     },
 
@@ -506,6 +527,7 @@ globalThis.LayoutRulerPanel = (() => {
       viewportSizes: snapshot.viewportSizes,
       hovered: snapshot.hovered,
       layers: snapshot.layers,
+      sections: snapshot.sections,
       overflow: snapshot.overflow,
       outline: snapshot.outline,
       grid: snapshot.grid,

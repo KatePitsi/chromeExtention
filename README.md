@@ -15,7 +15,7 @@ Requires Chrome 130 or later.
 
 ## What it shows
 
-- **Box model** on the hovered element: margin / border / padding / content, with px labels for every side.
+- **Box model** on the hovered element: margin / border / padding / content, with px labels for every side — margins in yellow (`m`, including small and negative ones, placed outside the box when the margin is too thin to hold the label), paddings in green (`p`), off-scale values in red.
 - **Tooltip** with selector, `width × height`, display, position, font-family, the font actually used (loaded web font, installed font or browser default, with the fonts it skipped and why, and a note when a missing weight is synthesized), font-size, line-height, font-weight and colour. It sits below the
   element's margin box (clear of grid labels, frozen elements and the panel), falling back to a viewport corner.
 - **Grid overlay** for grid containers: every column and row track with its used px size, gaps highlighted.
@@ -51,6 +51,12 @@ Requires Chrome 130 or later.
   one to scroll to it and lock on it. It scans up to 5,000 elements in idle time and rescans every 2 seconds.
 - **Spacing scale** (`S`): set a base (4px by default) and every margin, padding and gap that isn't a multiple
   of it is marked with "!". Sizes, spacing and font sizes also show rem, based on the root font size.
+- **Section spacing** (`M` or the **section spacing** button): finds the stacked sections of the page (the
+  children of `main`, or of `body`, skipping single wrappers) and, between every two of them, shades the bottom
+  padding and top padding in green and the gap between the boxes in yellow, with a chip giving the content-to-content
+  distance and its parts, e.g. `120px · pb 40 · gap 40 (mb 40 / mt 40) · pt 40` (collapsed margins show as one gap).
+  The panel lists every boundary and sums up how many different spacings the page uses, e.g. `80px ×5 · 64px ×1`;
+  click one to scroll to it and lock on the section below.
 - **Layers** (`Z` or the **layers / z-index** button): hover a component and every absolute, fixed, sticky or
   z-indexed element in it (or overlapping it) gets a purple frame and a chip with its z-index
   (the order follows stacking contexts, then z-index, then DOM order). The panel lists them front to back (top row painted on top) with
@@ -138,6 +144,7 @@ PDFs opened from `file://` need **Allow access to file URLs** (extension details
 | `T` | focus map: numbered tab order |
 | `O` | overflow & clipping finder |
 | `S` | spacing scale + rem |
+| `M` | section spacing: distances between page sections |
 | `Z` | layers: stacking order, z-index, inset |
 | `V` | viewport sizes: resize to common responsive sizes |
 | `A` | desktop safe areas: fold lines for real browser heights |

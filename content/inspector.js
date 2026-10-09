@@ -28,7 +28,8 @@
     spacing: 'showSpacing',
     layers: 'showLayers',
     viewport: 'showViewport',
-    'safe-areas': 'showSafeAreas'
+    'safe-areas': 'showSafeAreas',
+    sections: 'showSections'
   };
 
   const DEFAULT_PRESETS = [
@@ -55,6 +56,7 @@
     showLayers: false,
     showViewport: false,
     showSafeAreas: false,
+    showSections: false,
     viewportSize: { width: 375, height: 667 },
     spacingBase: 4,
     presets: DEFAULT_PRESETS.map((preset) => ({ ...preset })),
@@ -111,7 +113,10 @@
       position: fixed;
       box-sizing: border-box;
     }
-    .box--margin { background: rgba(251, 191, 36, .22); }
+    .box--margin {
+      background: rgba(251, 191, 36, .22);
+      outline: 1px dashed rgba(161, 98, 7, .9);
+    }
     .box--border { background: rgba(253, 230, 138, .35); }
     .box--padding { background: rgba(16, 185, 129, .22); }
     .box--content {
@@ -128,7 +133,9 @@
       box-shadow: 0 1px 3px rgba(2, 6, 23, .4);
     }
     .chip--track { background: rgba(217, 70, 239, .95); }
-    .chip--warn { background: #b45309; color: #ffffff; }
+    .chip--warn { background: #b91c1c; color: #ffffff; }
+    .chip--margin { background: #a16207; color: #ffffff; }
+    .chip--padding { background: #047857; color: #ffffff; }
     .chip--viewport { background: #c8102e; color: #ffffff; }
     .fold {
       position: fixed;
@@ -144,6 +151,17 @@
       background: rgba(15, 23, 42, .06);
     }
     .chip--fold { background: #c2410c; color: #ffffff; }
+    .rhythm {
+      position: fixed;
+      box-sizing: border-box;
+    }
+    .rhythm--padding { background: rgba(16, 185, 129, .2); }
+    .rhythm--gap {
+      background: rgba(251, 191, 36, .3);
+      border-top: 1px dashed #a16207;
+      border-bottom: 1px dashed #a16207;
+    }
+    .chip--rhythm { background: #1e3a8a; color: #ffffff; }
     .tip {
       position: fixed;
       display: grid;
@@ -1323,19 +1341,20 @@
 
   function spacingLabels(node) {
     const { rect, margin, padding } = metrics(node);
+    const outside = (value, room) => (Math.abs(value) < room ? Math.sign(value || 1) * (Math.abs(value) + room / 2) : value / 2);
     [
-      [margin.top, rect.left + rect.width / 2, rect.top - margin.top / 2, 'm'],
-      [margin.bottom, rect.left + rect.width / 2, rect.bottom + margin.bottom / 2, 'm'],
-      [margin.left, rect.left - margin.left / 2, rect.top + rect.height / 2, 'm'],
-      [margin.right, rect.right + margin.right / 2, rect.top + rect.height / 2, 'm'],
-      [padding.top, rect.left + rect.width / 2, rect.top + padding.top / 2, 'p'],
-      [padding.bottom, rect.left + rect.width / 2, rect.bottom - padding.bottom / 2, 'p'],
-      [padding.left, rect.left + padding.left / 2, rect.top + rect.height / 2, 'p'],
-      [padding.right, rect.right - padding.right / 2, rect.top + rect.height / 2, 'p']
+      [margin.top, rect.left + rect.width / 2, rect.top - outside(margin.top, 22), 'margin'],
+      [margin.bottom, rect.left + rect.width / 2, rect.bottom + outside(margin.bottom, 22), 'margin'],
+      [margin.left, rect.left - outside(margin.left, 48), rect.top + rect.height / 2, 'margin'],
+      [margin.right, rect.right + outside(margin.right, 48), rect.top + rect.height / 2, 'margin'],
+      [padding.top, rect.left + rect.width / 2, rect.top + padding.top / 2, 'padding'],
+      [padding.bottom, rect.left + rect.width / 2, rect.bottom - padding.bottom / 2, 'padding'],
+      [padding.left, rect.left + padding.left / 2, rect.top + rect.height / 2, 'padding'],
+      [padding.right, rect.right - padding.right / 2, rect.top + rect.height / 2, 'padding']
     ].forEach(([value, x, y, kind]) => {
-      if (value < 4) return;
-      const warn = offScale(value);
-      chip(`${kind}${r1(value)}${warn ? ' !' : ''}`, x, y, warn ? 'warn' : '', { transform: 'translate(-50%, -50%)' });
+      if (kind === 'margin' ? Math.abs(value) < 1 : value < 4) return;
+      const warn = offScale(Math.abs(value));
+      chip(`${kind === 'margin' ? 'm' : 'p'} ${r1(value)}${warn ? ' !' : ''}`, x, y, warn ? 'warn' : kind, { transform: 'translate(-50%, -50%)' });
     });
   }
 
@@ -1710,6 +1729,109 @@
       const label = `${area.screen} screen · fold ≈ ${area.fold}px${area === current ? ' · closest to this width' : ''}`;
       chip(label, innerWidth - 12, top - 12, 'fold', { transform: 'translate(-100%, -50%)' });
     });
+  }
+
+  function blockChildren(node) {
+    return [...node.children].flatMap((child) => {
+      if (child === host || child === designHost) return [];
+      const cs = getComputedStyle(child);
+      if (cs.display === 'contents') return blockChildren(child);
+      if (cs.display === 'none' || /^(absolute|fixed)$/.test(cs.position)) return [];
+      if (!child.checkVisibility({ visibilityProperty: true })) return [];
+      return child.getBoundingClientRect().height > 1 ? [child] : [];
+    });
+  }
+
+  function pageSections() {
+    let container = document.querySelector('main') || document.body;
+    for (let depth = 0; container && depth < 12; depth += 1) {
+      const children = blockChildren(container);
+      const height = container.getBoundingClientRect().height || 1;
+      if (children.length !== 1 || children[0].getBoundingClientRect().height < height * 0.9) {
+        return children.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+      }
+      container = children[0];
+    }
+    return [];
+  }
+
+  function sectionGaps() {
+    const sections = pageSections();
+    const gaps = [];
+    for (let index = 1; index < sections.length; index += 1) {
+      const above = metrics(sections[index - 1]);
+      const below = metrics(sections[index]);
+      const gap = below.rect.top - above.rect.bottom;
+      const paddingBottom = above.padding.bottom + above.border.bottom;
+      const paddingTop = below.padding.top + below.border.top;
+      gaps.push({
+        above: sections[index - 1],
+        below: sections[index],
+        top: above.rect.bottom - paddingBottom,
+        gapTop: above.rect.bottom,
+        gapBottom: below.rect.top,
+        bottom: below.rect.top + paddingTop,
+        left: Math.min(above.rect.left, below.rect.left),
+        right: Math.max(above.rect.right, below.rect.right),
+        total: paddingBottom + gap + paddingTop,
+        parts: [
+          ['pb', paddingBottom],
+          ['mb', above.margin.bottom],
+          ['mt', below.margin.top],
+          ['gap', gap],
+          ['pt', paddingTop]
+        ]
+      });
+    }
+    return gaps;
+  }
+
+  function rhythmLabel(item) {
+    const part = (key) => item.parts.find(([name]) => name === key)[1];
+    const shown = [];
+    if (part('pb') >= 0.5) shown.push(`pb ${r1(part('pb'))}`);
+    if (Math.abs(part('gap')) >= 0.5) {
+      const margins = [['mb', part('mb')], ['mt', part('mt')]].filter(([, value]) => Math.abs(value) >= 0.5).map(([key, value]) => `${key} ${r1(value)}`);
+      shown.push(`gap ${r1(part('gap'))}${margins.length ? ` (${margins.join(' / ')})` : ''}`);
+    }
+    if (part('pt') >= 0.5) shown.push(`pt ${r1(part('pt'))}`);
+    return `${r1(item.total)}px${shown.length ? ` · ${shown.join(' · ')}` : ''}`;
+  }
+
+  function drawSections() {
+    if (!state.showSections) return;
+    const gaps = sectionGaps();
+    state.sectionItems = gaps.map((item) => item.below);
+    gaps.forEach((item) => {
+      if (item.bottom < 0 || item.top > innerHeight) return;
+      const width = item.right - item.left;
+      [
+        ['rhythm rhythm--padding', item.top, item.gapTop],
+        ['rhythm rhythm--gap', item.gapTop, item.gapBottom],
+        ['rhythm rhythm--padding', item.gapBottom, item.bottom]
+      ].forEach(([className, from, to]) => {
+        if (to - from < 0.5) return;
+        const band = el('div', className);
+        place(band, { left: item.left, top: from, width, height: to - from });
+        layers.grid.append(band);
+      });
+      chip(rhythmLabel(item), Math.max(item.left, 0) + 16, (item.top + item.bottom) / 2, 'rhythm', { transform: 'translateY(-50%)' });
+    });
+  }
+
+  function sectionSlice() {
+    const gaps = sectionGaps();
+    const counts = new Map();
+    gaps.forEach((item) => counts.set(r1(item.total), (counts.get(r1(item.total)) || 0) + 1));
+    const summary = [...counts].sort((a, b) => b[1] - a[1]).map(([value, count]) => `${value}px ×${count}`).join(' · ');
+    return {
+      summary: gaps.length ? `${counts.size} different ${counts.size === 1 ? 'spacing' : 'spacings'}: ${summary}` : '',
+      items: gaps.map((item, index) => ({
+        index,
+        name: `${describe(item.above)} → ${describe(item.below)}`,
+        label: rhythmLabel(item)
+      }))
+    };
   }
 
   function drawLayoutGrid() {
@@ -2599,6 +2721,7 @@
         layers: state.showLayers,
         viewport: state.showViewport,
         'safe-areas': state.showSafeAreas,
+        sections: state.showSections,
         'copy-on-click': state.copyOnClick
       },
       hovered: hovered ? {
@@ -2610,6 +2733,7 @@
         frame: isFrame(hovered)
       } : null,
       layers: state.showLayers && hovered ? layerSlice(hovered) : null,
+      sections: state.showSections ? sectionSlice() : null,
       viewportSizes: state.showViewport ? { width: innerWidth, height: innerHeight, custom: state.viewportSize } : null,
       overflow: state.showOverflow ? {
         summary: overflowSummary(),
@@ -2669,6 +2793,7 @@
     drawGridRuler();
     drawLayoutGrid();
     drawSafeAreas();
+    drawSections();
     drawPins();
 
     const hovered = state.hovered && state.hovered.isConnected ? state.hovered : null;
@@ -2860,6 +2985,8 @@
   function reveal(index, kind) {
     const node = kind === 'layer'
       ? state.layerItems?.[index]
+      : kind === 'section'
+      ? state.sectionItems?.[index]
       : (kind === 'overflow' ? maps.overflow : maps.headings).items?.[index]?.node;
     if (!node?.isConnected) return;
     node.scrollIntoView({ block: 'center', inline: 'nearest' });
