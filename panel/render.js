@@ -55,6 +55,7 @@ globalThis.LayoutRulerPanel = (() => {
     ['R', 'ruler'],
     ['U', 'grid ruler'],
     ['E', 'export'],
+    ['⇧E', 'export full page'],
     ['C', 'copy'],
     ['⇧C', 'report'],
     ['X', 'clear all'],
@@ -257,7 +258,8 @@ globalThis.LayoutRulerPanel = (() => {
       }
       node.append(row(
         button('btn btn--primary', 'copy-element', 'Copy element', { icon: ICONS.copy }),
-        button('btn', 'export', 'Export PNG', { icon: ICONS.download })
+        button('btn', 'export', 'Export PNG', { icon: ICONS.download }),
+        button('btn', 'export-full', 'Export full page', { icon: ICONS.download })
       ));
       return [node];
     },
@@ -505,6 +507,7 @@ globalThis.LayoutRulerPanel = (() => {
       }), row(
         button('btn', 'copy-report', 'Copy report', { icon: ICONS.copy }),
         button('btn', 'export', 'Export PNG', { icon: ICONS.download }),
+        button('btn', 'export-full', 'Export full page', { icon: ICONS.download }),
         button('btn', 'clear', 'Clear', { icon: ICONS.trash })
       ));
       return [node];
@@ -648,6 +651,7 @@ globalThis.LayoutRulerPanel = (() => {
     if (event.key === 'Enter') return isActivatable(target) ? null : 'enter-frame';
     const key = event.key.toLowerCase();
     if (key === 'c') return event.shiftKey ? 'copy-report' : 'copy-element';
+    if (key === 'e') return event.shiftKey ? 'export-full' : 'export';
     return KEY_ACTIONS[key] || null;
   }
 

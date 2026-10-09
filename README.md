@@ -95,6 +95,11 @@ Requires Chrome 130 or later.
   nearby element edges (6px).
 - **Export PNG**: `E` (or the **Export PNG** button) hides the panel, captures the visible tab with every
   overlay drawn on it and downloads it as `fe-inspector-<timestamp>.png`.
+- **Export full page**: `⇧ E` (or the **Export full page** button) scrolls the page from top to bottom, captures
+  each screenful and stitches them into one PNG (`fe-inspector-full-<timestamp>.png`), overlays included. Fixed
+  and sticky elements are hidden after the first screenful so a sticky header appears once, and the scroll
+  position is put back afterwards. Very long pages are scaled down to stay under 32,000px. Pages that scroll inside
+  their own container instead of the window export the visible view only.
 - **Classes**: the panel lists every class of the hovered element (and of each frozen one) — click one to
   copy it as `.name`. With **click copies class** on (or `N`), clicking the element itself on the page copies
   all its classes (`.a.b`) and doesn't trigger the page's own click; it starts off, so clicks reach the page. Hover stays put while the pointer is over the panel; freeze with `F` to keep it
@@ -134,6 +139,7 @@ PDFs opened from `file://` need **Allow access to file URLs** (extension details
 | `R` | ruler: drag to measure (Shift = straight) |
 | `U` | grid ruler: 37.8px grid, clicks reach the page |
 | `E` | export the current view as PNG |
+| `⇧ E` | export the full page as one PNG |
 | `C` | copy the hovered measurements |
 | `⇧ C` | copy a full report (hovered + frozen + deltas + findings) |
 | `X` | clear every frozen element and ruler measure |

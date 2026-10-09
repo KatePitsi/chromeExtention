@@ -2645,6 +2645,99 @@
     }));
   }
 
+  const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+  const nextFrames = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const MAX_CANVAS_SIDE = 32000;
+
+  function loadImage(dataUrl) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = reject;
+      image.src = dataUrl;
+    });
+  }
+
+  async function captureView() {
+    const response = await chrome.runtime.sendMessage({ type: 'layout-ruler/capture' }).catch(() => null);
+    if (!response?.dataUrl) throw new Error(response?.error || 'capture failed');
+    return loadImage(response.dataUrl);
+  }
+
+  function hideFloating() {
+    const hidden = [...document.body.querySelectorAll('*')]
+      .filter((node) => node !== host && node !== designHost && /^(fixed|sticky)$/.test(getComputedStyle(node).position))
+      .map((node) => [node, node.style.getPropertyValue('visibility'), node.style.getPropertyPriority('visibility')]);
+    hidden.forEach(([node]) => node.style.setProperty('visibility', 'hidden', 'important'));
+    return () => hidden.forEach(([node, value, priority]) => {
+      if (value) node.style.setProperty('visibility', value, priority);
+      else node.style.removeProperty('visibility');
+    });
+  }
+
+  async function exportFullPage() {
+    const root = document.documentElement;
+    const total = Math.max(root.scrollHeight, document.body?.scrollHeight || 0);
+    if (total <= innerHeight + 1) {
+      toast('The page does not scroll, exporting the view');
+      exportPng();
+      return;
+    }
+    panelBody.classList.add('is-hidden');
+    toastNode.classList.add('is-hidden');
+    const startX = scrollX;
+    const startY = scrollY;
+    const behaviour = root.style.getPropertyValue('scroll-behavior');
+    root.style.setProperty('scroll-behavior', 'auto', 'important');
+    let restoreFloating = null;
+    let dataUrl = null;
+    try {
+      const steps = [];
+      for (let y = 0; y < total - innerHeight; y += innerHeight) steps.push(y);
+      steps.push(total - innerHeight);
+      let canvas = null;
+      let context = null;
+      let ratio = 1;
+      let last = 0;
+      for (const [index, y] of steps.entries()) {
+        scrollTo(0, y);
+        await nextFrames();
+        await wait(Math.max(250, 600 - (performance.now() - last)));
+        last = performance.now();
+        const image = await captureView();
+        if (!canvas) {
+          const pixels = image.naturalWidth / innerWidth;
+          ratio = Math.min(pixels, MAX_CANVAS_SIDE / total);
+          canvas = document.createElement('canvas');
+          canvas.width = Math.round(innerWidth * ratio);
+          canvas.height = Math.round(total * ratio);
+          context = canvas.getContext('2d');
+        }
+        context.drawImage(image, 0, Math.round(scrollY * ratio), canvas.width, Math.round(innerHeight * ratio));
+        if (index === 0) restoreFloating = hideFloating();
+      }
+      dataUrl = canvas.toDataURL('image/png');
+    } catch (error) {
+      dataUrl = null;
+    } finally {
+      restoreFloating?.();
+      scrollTo(startX, startY);
+      if (behaviour) root.style.setProperty('scroll-behavior', behaviour);
+      else root.style.removeProperty('scroll-behavior');
+      panelBody.classList.toggle('is-hidden', state.poppedOut);
+      toastNode.classList.remove('is-hidden');
+    }
+    if (!dataUrl) {
+      toast('Full-page export failed on this page');
+      return;
+    }
+    const link = document.createElement('a');
+    link.href = await stamp(dataUrl);
+    link.download = `fe-inspector-full-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.png`;
+    link.click();
+    toast('Full-page PNG exported');
+  }
+
   function placeToast() {
     if (!panelBody || state.poppedOut) {
       Object.assign(toastNode.style, { right: '16px', bottom: '16px' });
@@ -3049,6 +3142,7 @@
     else if (action === 'copy-report') copy(reportText(), 'Report copied');
     else if (action === 'copy-class') copy(value, `${value} copied`);
     else if (action === 'export') exportPng();
+    else if (action === 'export-full') exportFullPage();
     else if (action === 'popout') setPoppedOut(true);
     else if (action === 'popin') setPoppedOut(false);
     else if (action === 'reveal') reveal(Number(index), value);
