@@ -1508,6 +1508,7 @@
     const { width, height } = tip.getBoundingClientRect();
     const { left, top } = tipPosition(node, width, height);
     Object.assign(tip.style, { left: `${left}px`, top: `${top}px` });
+    placedTips.push({ left, top, right: left + width, bottom: top + height });
   }
 
   function overlap(a, b) {
@@ -1516,12 +1517,15 @@
     return width > 0 && height > 0 ? width * height : 0;
   }
 
+  const placedTips = [];
+
   function tipObstacles(node, avoid) {
     const obstacles = [{ rect: avoid, weight: 4 }];
     if (!state.poppedOut && panelBody) obstacles.push({ rect: panelBody.getBoundingClientRect(), weight: 4 });
     state.pins.forEach((pin) => {
       if (pin.el.isConnected && pin.el !== node) obstacles.push({ rect: pin.el.getBoundingClientRect(), weight: 1 });
     });
+    placedTips.forEach((rect) => obstacles.push({ rect, weight: 4 }));
     return obstacles;
   }
 
@@ -2380,7 +2384,7 @@
     return list.sort(frontFirst);
   }
 
-  function drawLayers(node) {
+  function drawLayers(node, track = true) {
     const list = layerList(node);
     const own = getComputedStyle(node);
     if (own.position !== 'static') {
@@ -2406,7 +2410,7 @@
       target.addEventListener('click', () => lockOn(child));
       layers.labels.append(target);
     });
-    state.layerItems = list;
+    if (track) state.layerItems = list;
   }
 
   function layerSlice(node) {
@@ -2881,6 +2885,16 @@
     return parts.join('|');
   }
 
+  function decorate(node, primary) {
+    drawBoxModel(node);
+    spacingLabels(node);
+    if (state.showLayout) {
+      drawLayout(node);
+      if (!state.showLayers) drawPositioned(node);
+    }
+    if (state.showLayers) drawLayers(node, primary);
+  }
+
   function render() {
     Object.values(layers).forEach(clear);
     drawGridRuler();
@@ -2890,30 +2904,29 @@
     drawPins();
 
     const hovered = state.hovered && state.hovered.isConnected ? state.hovered : null;
-    if (hovered) {
-      drawBoxModel(hovered);
-      spacingLabels(hovered);
-      if (state.showLayout) {
-        drawLayout(hovered);
-        if (!state.showLayers) drawPositioned(hovered);
-      }
-      if (state.showLayers) drawLayers(hovered);
-    }
+    const frozen = state.pins.filter((pin) => pin.el.isConnected && pin.el !== hovered);
+    frozen.forEach((pin) => decorate(pin.el, false));
+    if (hovered) decorate(hovered, true);
 
-    if (state.showLayout && hovered) {
-      const hoveredRect = hovered.getBoundingClientRect();
-      state.pins.forEach((pin) => {
-        if (pin.el === hovered || !pin.el.isConnected) return;
-        drawDistance(pin.el.getBoundingClientRect(), hoveredRect, pin.color);
+    if (state.showLayout) {
+      const live = state.pins.filter((pin) => pin.el.isConnected);
+      live.slice(1).forEach((pin, index) => {
+        drawDistance(live[index].el.getBoundingClientRect(), pin.el.getBoundingClientRect(), pin.color);
       });
+      if (hovered) {
+        const hoveredRect = hovered.getBoundingClientRect();
+        frozen.forEach((pin) => drawDistance(pin.el.getBoundingClientRect(), hoveredRect, pin.color));
+      }
     }
 
     drawRuler();
     refreshMaps(true);
     placeDesign();
 
+    placedTips.length = 0;
     const info = hovered ? accessibility(hovered) : null;
     if (hovered) drawTip(hovered, info);
+    frozen.forEach((pin) => drawTip(pin.el, accessibility(pin.el)));
     const snap = snapshot(info);
     if (!state.poppedOut) Panel.render(panelBody, snap, { mode: 'page', level: 2 });
     pushState(snap);

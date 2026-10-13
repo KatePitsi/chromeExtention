@@ -104,7 +104,7 @@ Requires Chrome 130 or later.
   copy it as `.name`. With **click copies class** on (or `N`), clicking the element itself on the page copies
   all its classes (`.a.b`) and doesn't trigger the page's own click; it starts off, so clicks reach the page. Hover stays put while the pointer is over the panel; freeze with `F` to keep it
   while you travel there.
-- **Frozen elements**: pin any element, then hover another — dashed rulers show the distance between them
+- **Frozen elements**: pin any element and it keeps everything hover shows — box model, margin / padding labels, grid / flex and layers overlays and its tooltip — then hover another: dashed rulers show the distance between them, and between consecutive frozen elements
   (edge deltas when they overlap or nest), and the panel lists Δ width / Δ height per frozen element.
 - **Iframes**: the inspector runs in the top page. Hover an iframe and press **Enter** (or the panel's
   **Inspect inside this iframe** button) to move the inspector into it; **Esc** or **Back to the parent page**
