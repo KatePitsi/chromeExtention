@@ -15,7 +15,7 @@ Requires Chrome 130 or later.
 
 ## What it shows
 
-- **Box model** on the hovered element: margin / border / padding / content, with px labels for every side — margins in yellow (`m`, including small and negative ones, placed outside the box when the margin is too thin to hold the label), paddings in green (`p`), off-scale values in red.
+- **Box model** on the hovered element (only once a feature is on — with nothing selected, hover just outlines the element): margin / border / padding / content, with px labels for every side — margins in yellow (`m`, including small and negative ones, placed outside the box when the margin is too thin to hold the label), paddings in green (`p`), off-scale values in red.
 - **Tooltip** with selector, `width × height`, display, position, font-family, the font actually used (loaded web font, installed font or browser default, with the fonts it skipped and why, and a note when a missing weight is synthesized), font-size, line-height, font-weight and colour. It sits below the
   element's margin box (clear of grid labels, frozen elements and the panel), falling back to a viewport corner.
 - **Grid overlay** for grid containers: every column and row track with its used px size, gaps highlighted.

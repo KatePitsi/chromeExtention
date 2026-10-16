@@ -113,6 +113,7 @@
       position: fixed;
       box-sizing: border-box;
     }
+    .box--outline { outline: 1px solid rgba(237, 25, 65, .95); }
     .box--margin {
       background: rgba(251, 191, 36, .22);
       outline: 1px dashed rgba(161, 98, 7, .9);
@@ -2885,7 +2886,19 @@
     return parts.join('|');
   }
 
+  const PASSIVE_TOGGLES = new Set(['copy-on-click', 'viewport']);
+
+  function anyFeatureOn() {
+    return state.ruler.enabled || Object.entries(TOGGLES).some(([action, key]) => !PASSIVE_TOGGLES.has(action) && state[key]);
+  }
+
   function decorate(node, primary) {
+    if (!anyFeatureOn()) {
+      const frame = el('div', 'box box--outline');
+      place(frame, node.getBoundingClientRect());
+      layers.box.append(frame);
+      return;
+    }
     drawBoxModel(node);
     spacingLabels(node);
     if (state.showLayout) {
